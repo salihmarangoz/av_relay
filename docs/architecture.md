@@ -80,9 +80,10 @@ A menu bar app (no Dock icon) in Swift. Deployment target macOS 14.
 
 | part | job |
 |---|---|
-| Identity | X25519 static key in the Keychain; device ID; the list of paired clients |
+| Identity | X25519 static key, device ID, the list of paired clients: files in `~/Library/Application Support/AV Relay/` (folder 0700, key 0600), like an SSH key. Not the Keychain: ad-hoc signed updates change the app's signature, and the Keychain would ask the user to allow access again after each update. |
 | Pairing | the window: code, countdown, addresses; CPace (libsodium's ristretto255) + Noise XXpsk3 |
 | Noise | Noise_IK / XXpsk3 on CryptoKit (X25519, ChaChaPoly, SHA-256), tested against `tests/vectors` |
+| `avrelay-devserver` | the same server headless, without media: for interop tests (`tests/interop/reference_client.py`) and for developing a client without the Mac app |
 | Control server | `NWListener` on TCP 48100: framing, preamble, one session at a time, keepalive |
 | Bonjour | advertises `_avrelay._tcp` with TXT `v=1`, `id=` |
 | Media engine | libwebrtc peer connection (offerer): H.264 via VideoToolbox, Opus, GCC/pacing/RTX built in |
