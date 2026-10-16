@@ -7,6 +7,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use tokio::net::TcpStream;
 
+use crate::audio::{self, PipeWire};
 use crate::proto::pairing::{self, ClientInfo};
 use crate::proto::{ClientMsg, DEFAULT_PORT, ServerMsg, VideoFormat, session};
 use crate::store::{PairedMac, Store, hex_encode};
@@ -44,6 +45,59 @@ fn fill_test_pattern(frame: &mut [u8], format: vcam::CameraFormat, t: f32) {
             px.copy_from_slice(&[luma, cb, luma, cr]);
         }
     }
+}
+
+/// `vmic-test [SECONDS] [--default] [--drift PPM]`: plays a 440 Hz tone
+/// into the virtual microphone, by default 200 ppm fast like a drifting Mac
+/// clock, and logs when apps start and stop recording. With --default it is
+/// the default input meanwhile, and the previous default comes back at the
+/// end.
+pub fn vmic_test(args: &[String]) -> Result<()> {
+    let seconds: u64 = args.first().and_then(|a| a.parse().ok()).unwrap_or(30);
+    let make_default = args.iter().any(|a| a == "--default");
+    let ppm: f64 = args
+        .iter()
+        .position(|a| a == "--drift")
+        .and_then(|i| args.get(i + 1))
+        .map(|v| v.parse())
+        .transpose()?
+        .unwrap_or(200.0);
+    let pw = PipeWire::start()?;
+    let default_input = audio::DefaultInput::new()?;
+    // As the app does at startup: repair a default left behind by a crash.
+    default_input.give_back(&pw)?;
+    log::info!("configured default input: {}", pw.default_source()?.as_deref().unwrap_or("(automatic)"));
+    let feed = pw.start_mic(|in_use| log::info!("usage callback: in_use={in_use}"))?;
+    if make_default {
+        default_input.take_over(&pw)?;
+    }
+    println!("Record from '{}' (e.g. `pw-record --target {} out.wav`); stops in {seconds} s.", audio::MIC_DESCRIPTION, audio::MIC_NODE_NAME);
+
+    // 20 ms chunks, like Opus frames, at 48 kHz + the drift.
+    let rate = audio::RATE as f64 * (1.0 + ppm / 1e6);
+    let chunk = (audio::RATE / 50) as usize;
+    let start = Instant::now();
+    let mut phase = 0.0f64;
+    let mut sent = 0usize;
+    let mut buf = vec![0f32; chunk];
+    while start.elapsed() < Duration::from_secs(seconds) {
+        let due = (start.elapsed().as_secs_f64() * rate) as usize;
+        while sent + chunk <= due {
+            for s in buf.iter_mut() {
+                *s = (phase * std::f64::consts::TAU).sin() as f32 * 0.3;
+                phase = (phase + 440.0 / audio::RATE as f64).fract();
+            }
+            feed.push(&buf);
+            sent += chunk;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    if make_default {
+        default_input.give_back(&pw)?;
+    }
+    pw.stop_mic()?;
+    drop(pw);
+    Ok(())
 }
 
 fn client_info() -> ClientInfo {

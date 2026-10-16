@@ -1,3 +1,4 @@
+mod audio;
 mod crypto;
 mod devtools;
 mod proto;
@@ -6,7 +7,8 @@ mod vcam;
 
 use anyhow::{Result, bail};
 
-const USAGE: &str = "usage: av-relay vcam-test | pair HOST[:PORT] [CODE] | session-test [SECONDS]";
+const USAGE: &str =
+    "usage: av-relay vcam-test | vmic-test [SECONDS] [--default] | pair HOST[:PORT] [CODE] | session-test [SECONDS]";
 
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -14,6 +16,7 @@ fn main() -> Result<()> {
     let rest = args.get(1..).unwrap_or_default();
     match args.first().map(String::as_str) {
         Some("vcam-test") => devtools::vcam_test(),
+        Some("vmic-test") => devtools::vmic_test(rest),
         Some("pair") => devtools::pair(rest),
         Some("session-test") => devtools::session_test(rest),
         _ => bail!(USAGE),
