@@ -11,9 +11,25 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::crypto::{self, StaticKey};
+use crate::proto::VideoFormat;
 
 const IDENTITY_FILE: &str = "identity.key";
 const PAIRED_FILE: &str = "paired.json";
+const SETTINGS_FILE: &str = "settings.json";
+
+/// The user's choices.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(default)]
+pub struct Settings {
+    /// The virtual camera's format: the most the Mac sends.
+    pub video: VideoFormat,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self { video: VideoFormat { width: 1920, height: 1080, fps: 30 } }
+    }
+}
 
 pub struct Store {
     dir: PathBuf,
@@ -109,6 +125,19 @@ impl Store {
         self.write_atomic(PAIRED_FILE, &serde_json::to_vec_pretty(mac)?)
     }
 
+    pub fn settings(&self) -> Result<Settings> {
+        let path = self.dir.join(SETTINGS_FILE);
+        match fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).with_context(|| format!("reading {}", path.display())),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Settings::default()),
+            Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+        }
+    }
+
+    pub fn save_settings(&self, settings: &Settings) -> Result<()> {
+        self.write_atomic(SETTINGS_FILE, &serde_json::to_vec_pretty(settings)?)
+    }
+
     pub fn forget_paired_mac(&self) -> Result<()> {
         match fs::remove_file(self.dir.join(PAIRED_FILE)) {
             Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e.into()),
@@ -185,6 +214,16 @@ mod tests {
         assert_eq!(mac.key().unwrap(), key);
         store.forget_paired_mac().unwrap();
         assert_eq!(store.paired_mac().unwrap(), None);
+        fs::remove_dir_all(store.dir()).unwrap();
+    }
+
+    #[test]
+    fn settings_default_and_round_trip() {
+        let store = temp_store();
+        assert_eq!(store.settings().unwrap().video, VideoFormat { width: 1920, height: 1080, fps: 30 });
+        let s = Settings { video: VideoFormat { width: 1280, height: 720, fps: 30 } };
+        store.save_settings(&s).unwrap();
+        assert_eq!(store.settings().unwrap(), s);
         fs::remove_dir_all(store.dir()).unwrap();
     }
 }
