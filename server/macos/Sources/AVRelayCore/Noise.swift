@@ -204,9 +204,21 @@ public struct NoiseHandshake: Sendable {
     /// - Parameters:
     ///   - remoteStatic: the responder's static key, which an IK initiator must know in advance.
     ///   - psk: 32 bytes, for psk patterns.
-    ///   - ephemeral: tests only (fixed test vectors); leave nil everywhere else.
     public init(pattern: NoisePattern, initiator: Bool, prologue: Data, staticKey: NoiseKeyPair,
-                remoteStatic: Data? = nil, psk: Data? = nil, ephemeral: NoiseKeyPair? = nil) throws {
+                remoteStatic: Data? = nil, psk: Data? = nil) throws {
+        try self.init(pattern: pattern, initiator: initiator, prologue: prologue, staticKey: staticKey,
+                      remoteStatic: remoteStatic, psk: psk, fixedEphemeral: nil)
+    }
+
+    /// Tests only: a fixed ephemeral key, for the test vectors.
+    init(pattern: NoisePattern, initiator: Bool, prologue: Data, staticKey: NoiseKeyPair,
+         remoteStatic: Data? = nil, psk: Data? = nil, ephemeral: NoiseKeyPair) throws {
+        try self.init(pattern: pattern, initiator: initiator, prologue: prologue, staticKey: staticKey,
+                      remoteStatic: remoteStatic, psk: psk, fixedEphemeral: ephemeral)
+    }
+
+    private init(pattern: NoisePattern, initiator: Bool, prologue: Data, staticKey: NoiseKeyPair,
+                 remoteStatic: Data?, psk: Data?, fixedEphemeral ephemeral: NoiseKeyPair?) throws {
         self.pattern = pattern
         isInitiator = initiator
         s = staticKey

@@ -110,7 +110,9 @@ public actor ClientSession {
     }
 
     public func send(_ message: Message) async throws {
-        try await connection.send(try transport.encrypt(JSON.encode(message)))
+        // Encrypt and queue without suspending in between (nonce order).
+        let sent = connection.enqueue(try transport.encrypt(JSON.encode(message)))
+        try await sent.wait()
     }
 
     public func receive() async throws -> Message {

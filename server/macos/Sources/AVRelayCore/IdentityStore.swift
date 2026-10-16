@@ -42,26 +42,41 @@ public final class IdentityStore: @unchecked Sendable {
     }
 
     /// Loads the key and the paired clients, creating the key on first use.
+    /// Only a missing file means "first use": a file that exists but can't
+    /// be read is an error, never a reason to make a new key.
     public init(directory: URL = IdentityStore.defaultDirectory) throws {
         self.directory = directory
         let fm = FileManager.default
-        try fm.createDirectory(at: directory, withIntermediateDirectories: true,
-                               attributes: [.posixPermissions: 0o700])
+        try fm.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+
         let keyPath = directory.appendingPathComponent("identity.key")
-        if let raw = fm.contents(atPath: keyPath.path) {
+        if let raw = try Self.readIfPresent(keyPath) {
             identity = try NoiseKeyPair(privateKey: raw)
+            try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: keyPath.path)
         } else {
             let fresh = NoiseKeyPair()
-            try Self.writePrivately(fresh.privateKeyData, to: keyPath)
-            identity = fresh
+            // Another instance may have created it meanwhile: then use that one.
+            if try Self.createExclusively(fresh.privateKeyData, at: keyPath) {
+                identity = fresh
+            } else {
+                identity = try NoiseKeyPair(privateKey: try Data(contentsOf: keyPath))
+            }
         }
-        let clientsPath = directory.appendingPathComponent("paired-clients.json")
-        if let data = fm.contents(atPath: clientsPath.path) {
+        if let data = try Self.readIfPresent(directory.appendingPathComponent("paired-clients.json")) {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             clients = try decoder.decode([PairedClient].self, from: data)
         } else {
             clients = []
+        }
+    }
+
+    private static func readIfPresent(_ url: URL) throws -> Data? {
+        do {
+            return try Data(contentsOf: url)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return nil
         }
     }
 
@@ -99,16 +114,38 @@ public final class IdentityStore: @unchecked Sendable {
         try Self.writePrivately(try encoder.encode(clients), to: clientsFile)
     }
 
-    /// Writes a file that only the user can read, atomically.
+    /// Writes a file that only the user can read, atomically: a 0600 temp
+    /// file from the start, synced, then renamed over the old one.
     private static func writePrivately(_ data: Data, to url: URL) throws {
-        let temp = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString)")
-        guard FileManager.default.createFile(atPath: temp.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
-            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: temp.path])
-        }
+        let temp = try writeTemp(data, next: url)
         guard rename(temp.path, url.path) == 0 else {
             let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-            try? FileManager.default.removeItem(at: temp)
+            unlink(temp.path)
             throw error
         }
+    }
+
+    /// Creates the file with this content unless it exists; false if it did.
+    private static func createExclusively(_ data: Data, at url: URL) throws -> Bool {
+        let temp = try writeTemp(data, next: url)
+        defer { unlink(temp.path) }
+        // link() fails if the name exists, so the file appears whole or not at all.
+        if link(temp.path, url.path) == 0 { return true }
+        if errno == EEXIST { return false }
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+
+    private static func writeTemp(_ data: Data, next url: URL) throws -> URL {
+        let temp = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString)")
+        let fd = open(temp.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { close(fd) }
+        let written = data.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+        guard written == data.count, fsync(fd) == 0 else {
+            let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            unlink(temp.path)
+            throw error
+        }
+        return temp
     }
 }

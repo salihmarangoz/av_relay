@@ -109,7 +109,7 @@ public enum CPace {
         }
 
         /// Tests only (fixed vectors): a given scalar.
-        public init(initiator: Bool, prs: Data, ci: Data, sid: Data, ad: Data = Data(), scalar: Data) {
+        init(initiator: Bool, prs: Data, ci: Data, sid: Data, ad: Data = Data(), scalar: Data) {
             isInitiator = initiator
             self.scalar = scalar
             self.sid = sid

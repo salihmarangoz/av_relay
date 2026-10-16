@@ -69,18 +69,25 @@ public final class FramedConnection: @unchecked Sendable {
     }
 
     public func send(_ payload: Data) async throws {
-        guard payload.count <= Self.maxFrameLength else { throw ConnectionError.frameTooLarge(payload.count) }
+        try await enqueue(payload).wait()
+    }
+
+    /// Queues a frame at once, so frames leave in the order of the calls;
+    /// wait on the result to know it was sent. An actor that encrypts and
+    /// then sends must enqueue before it awaits anything, or another send
+    /// could overtake it and break the Noise nonce order.
+    public func enqueue(_ payload: Data) -> SendCompletion {
+        let completion = SendCompletion()
+        guard payload.count <= Self.maxFrameLength else {
+            completion.finish(.failure(ConnectionError.frameTooLarge(payload.count)))
+            return completion
+        }
         var frame = Data([UInt8(payload.count >> 8), UInt8(payload.count & 0xFF)])
         frame.append(payload)
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            connection.send(content: frame, completion: .contentProcessed { error in
-                if let error {
-                    continuation.resume(throwing: ConnectionError.failed(error.localizedDescription))
-                } else {
-                    continuation.resume()
-                }
-            })
-        }
+        connection.send(content: frame, completion: .contentProcessed { error in
+            completion.finish(error.map { .failure(ConnectionError.failed($0.localizedDescription)) } ?? .success(()))
+        })
+        return completion
     }
 
     /// Closes the connection after `seconds` unless the deadline is moved or cleared first.
@@ -149,6 +156,33 @@ public final class FramedConnection: @unchecked Sendable {
                     continuation.resume(throwing: ConnectionError.closed)
                 }
             }
+        }
+    }
+}
+
+/// The outcome of one queued frame, to await.
+public final class SendCompletion: @unchecked Sendable {
+    private let lock = NSLock()
+    private var result: Result<Void, Error>?
+    private var continuation: CheckedContinuation<Void, Error>?
+
+    func finish(_ outcome: Result<Void, Error>) {
+        let waiting: CheckedContinuation<Void, Error>? = lock.withLock {
+            guard result == nil else { return nil }
+            result = outcome
+            defer { continuation = nil }
+            return continuation
+        }
+        waiting?.resume(with: outcome)
+    }
+
+    public func wait() async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let done: Result<Void, Error>? = lock.withLock {
+                if result == nil { self.continuation = continuation }
+                return result
+            }
+            if let done { continuation.resume(with: done) }
         }
     }
 }

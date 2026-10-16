@@ -15,6 +15,7 @@ public protocol SessionHandler: AnyObject, Sendable {
     /// `answer`, `ice`, `media`, `ice-restart`, and any type the server itself doesn't handle.
     func session(_ session: ServerSession, didReceive message: Message) async
     /// The session is over (closed, replaced, timed out); stop its capture now.
+    /// Called once for every session that started, after its last message.
     func sessionDidEnd(_ session: ServerSession) async
 }
 
@@ -139,7 +140,7 @@ public actor RelayServer {
         if let session = active {
             active = nil
             await session.close(sending: .bye(.quit))
-            await endSession(session, reason: "quit")
+            endSession(session, reason: "quit")
         }
     }
 
@@ -204,11 +205,21 @@ public actor RelayServer {
         return .success(window.code)
     }
 
+    /// Stores a newly paired client, but only while its pairing window is
+    /// still the open one: the user may have closed it, or opened a new one,
+    /// during the attempt.
+    private func commitPairing(_ id: UUID, client: PairedClient) throws -> Bool {
+        guard let window, window.id == id, window.attemptInProgress else { return false }
+        try store.add(client)
+        return true
+    }
+
     private func pairingFinished(_ id: UUID, client: PairedClient?, failure: String?) {
-        if let window, window.id == id {
+        let wasOpen = window?.id == id
+        if wasOpen {
             windowTimer?.cancel()
             windowTimer = nil
-            self.window = nil
+            window = nil
         }
         if let client {
             emit.yield(.paired(client))
@@ -217,7 +228,7 @@ public actor RelayServer {
             emit.yield(.pairingFailed(failure ?? "failed"))
             log.info("pairing failed: \(failure ?? "", privacy: .public)")
         }
-        emit.yield(.pairingWindowClosed)
+        if wasOpen { emit.yield(.pairingWindowClosed) }
     }
 
     // MARK: Paired clients
@@ -228,7 +239,7 @@ public actor RelayServer {
         if let session = active, session.client.publicKey == publicKey {
             active = nil
             await session.close(sending: .bye(.unpaired))
-            await endSession(session, reason: "unpaired")
+            endSession(session, reason: "unpaired")
         }
     }
 
@@ -254,17 +265,26 @@ public actor RelayServer {
         defer { if counted { unauthenticated -= 1 } }
         do {
             let preambleData = try await connection.receiveFrame(maxLength: configuration.plaintextFrameLimit)
-            guard let preamble = try? JSON.decode(Preamble.self, from: preambleData),
-                  preamble.proto == Preamble.protocolName else {
+            // Loosely first: a future version may bring a mode we don't know.
+            struct AnyPreamble: Decodable { var proto: String?; var version: Int?; var mode: String? }
+            guard let loose = try? JSON.decode(AnyPreamble.self, from: preambleData),
+                  loose.proto == Preamble.protocolName, let version = loose.version else {
                 connection.close()
                 return
             }
-            guard preamble.version == Preamble.currentVersion else {
+            guard version == Preamble.currentVersion else {
                 try await sendPlain(.error(.unsupportedVersion), on: connection)
                 connection.closeGracefully()
                 return
             }
-            switch preamble.mode {
+            guard let mode = loose.mode.flatMap(Preamble.Mode.init(rawValue:)) else {
+                try await sendPlain(.error(.badMessage, "unknown mode"), on: connection)
+                connection.closeGracefully()
+                return
+            }
+            // The handshake's own timeout counts from the preamble.
+            connection.setDeadline(configuration.handshakeTimeout)
+            switch mode {
             case .pair:
                 await runPairing(on: connection)
             case .session:
@@ -329,7 +349,11 @@ public actor RelayServer {
             var transport = try noise.transport()
 
             let client = PairedClient(publicKey: clientKey, name: Self.cleanName(info.name))
-            try store.add(client)
+            guard try commitPairing(windowID, client: client) else {
+                connection.close()
+                pairingFinished(windowID, client: nil, failure: "the pairing window was closed")
+                return
+            }
             try await connection.send(try transport.encrypt(JSON.encode(
                 Message.paired(name: configuration.name, deviceID: store.deviceID, app: configuration.app))))
             pairingFinished(windowID, client: client, failure: nil)
@@ -370,7 +394,7 @@ public actor RelayServer {
         guard let clientKey = noise.remoteStaticKey else { throw NoiseError.missingKey }
         var transport = try noise.transport()
         try await connection.send(message2)
-        guard let client = store.client(publicKey: clientKey) else {
+        guard store.client(publicKey: clientKey) != nil else {
             try? await connection.send(try transport.encrypt(JSON.encode(Message.error(.notPaired))))
             connection.closeGracefully()
             return nil
@@ -381,35 +405,69 @@ public actor RelayServer {
             connection.closeGracefully()
             return nil
         }
-        // The client holds its keys: now it may replace its own old session, or find the server busy.
-        if let current = active {
-            if current.client.publicKey == clientKey {
-                active = nil
-                await current.close(sending: .bye(.replaced))
-                await endSession(current, reason: "replaced")
-            } else {
-                try? await connection.send(try transport.encrypt(JSON.encode(Message.error(.busy))))
-                connection.closeGracefully()
-                return nil
-            }
+        // The client holds its keys. It may have been removed while we
+        // waited for hello, so look it up again.
+        guard let current = store.client(publicKey: clientKey) else {
+            try? await connection.send(try transport.encrypt(JSON.encode(Message.error(.notPaired))))
+            connection.closeGracefully()
+            return nil
         }
-        let session = ServerSession(client: client, connection: connection, transport: transport,
+        // Decide and claim the slot with no suspension in between: it may
+        // replace this client's own old session, or find the server busy.
+        let previous = active
+        if let previous, previous.client.publicKey != clientKey {
+            try? await connection.send(try transport.encrypt(JSON.encode(Message.error(.busy))))
+            connection.closeGracefully()
+            return nil
+        }
+        let session = ServerSession(client: current, connection: connection, transport: transport,
                                     hello: Hello(name: name, app: app, video: video))
         active = session
+        if let previous {
+            await previous.close(sending: .bye(.replaced))
+            endSession(previous, reason: "replaced")
+        }
         return session
     }
 
     private func runSession(_ session: ServerSession) async {
         emit.yield(.sessionStarted(session.client))
         log.info("session with \(session.client.name, privacy: .public)")
+        // The handler gets its calls in order on its own task, so a slow one
+        // (a permission prompt) never stalls reading, pings or the idle timeout.
+        // A session replaced before its welcome went out never starts, and
+        // then doesn't end either, as far as the handler can tell.
+        let handler = self.handler
+        Task {
+            var started = false
+            for await event in session.events {
+                switch event {
+                case .started:
+                    started = true
+                    await handler?.sessionDidStart(session, hello: session.hello)
+                case .message(let message):
+                    await handler?.session(session, didReceive: message)
+                case .ended:
+                    if started { await handler?.sessionDidEnd(session) }
+                    return
+                }
+            }
+        }
         session.connection.setDeadline(configuration.idleTimeout)
         var reason = "closed"
         do {
             try await session.send(.welcome(name: configuration.name, app: configuration.app, deviceID: store.deviceID))
-            await handler?.sessionDidStart(session, hello: session.hello)
+            session.deliver.yield(.started)
             while true {
-                let message = try await session.receive()
+                let plaintext = try await session.receive()
+                // Replaced, removed or stopped while this frame was on its way: drop it.
+                guard active === session else { throw ConnectionError.closed }
                 session.connection.setDeadline(configuration.idleTimeout)
+                guard let message = try? JSON.decode(Message.self, from: plaintext) else {
+                    reason = "bad message"
+                    await session.close(sending: .error(.badMessage))
+                    throw ConnectionError.closed
+                }
                 switch message {
                 case .ping(let id):
                     try await session.send(.pong(id: id))
@@ -423,9 +481,11 @@ public actor RelayServer {
                     await session.close(sending: .bye(.unpaired))
                     throw ConnectionError.closed
                 case .hello:
-                    try await session.send(.error(.badMessage, "hello was already sent"))
+                    reason = "second hello"
+                    await session.close(sending: .error(.badMessage, "hello was already sent"))
+                    throw ConnectionError.closed
                 default:
-                    await handler?.session(session, didReceive: message)
+                    session.deliver.yield(.message(message))
                 }
             }
         } catch {
@@ -434,12 +494,15 @@ public actor RelayServer {
         if active === session {
             active = nil
             await session.close(sending: nil)
-            await endSession(session, reason: reason)
+            endSession(session, reason: reason)
         }
     }
 
-    private func endSession(_ session: ServerSession, reason: String) async {
-        await handler?.sessionDidEnd(session)
+    /// Called exactly once per session that was active, by whoever took it
+    /// out of `active`. The handler hears about it after any message it got.
+    private func endSession(_ session: ServerSession, reason: String) {
+        session.deliver.yield(.ended)
+        session.deliver.finish()
         emit.yield(.sessionEnded(session.client, reason: reason))
         log.info("session with \(session.client.name, privacy: .public) ended: \(reason, privacy: .public)")
     }
@@ -452,37 +515,54 @@ public actor ServerSession {
     nonisolated let connection: FramedConnection
     private var transport: NoiseTransport
     private var closed = false
+    /// What the handler gets, in order: start, messages, end. See RelayServer.runSession.
+    nonisolated let events: AsyncStream<SessionEvent>
+    nonisolated let deliver: AsyncStream<SessionEvent>.Continuation
+
+    enum SessionEvent: Sendable {
+        case started
+        case message(Message)
+        case ended
+    }
 
     init(client: PairedClient, connection: FramedConnection, transport: NoiseTransport, hello: Hello) {
         self.client = client
         self.connection = connection
         self.transport = transport
         self.hello = hello
+        (events, deliver) = AsyncStream.makeStream(of: SessionEvent.self)
     }
 
     /// The Mac's address on this connection: the one to offer ICE candidates on.
     public nonisolated var localAddress: String? { connection.localAddress }
     public nonisolated var remoteAddress: String? { connection.remoteAddress }
 
+    public var isClosed: Bool { closed }
+
     public func send(_ message: Message) async throws {
         guard !closed else { throw ConnectionError.closed }
-        try await connection.send(try transport.encrypt(JSON.encode(message)))
+        // Encrypt and queue with no suspension in between: the frames must
+        // leave in nonce order.
+        let sent = connection.enqueue(try transport.encrypt(JSON.encode(message)))
+        try await sent.wait()
     }
 
-    func receive() async throws -> Message {
-        let plaintext = try transport.decrypt(try await connection.receiveFrame())
-        return try JSON.decode(Message.self, from: plaintext)
+    /// The next message's plaintext. Throws once the session is closed.
+    func receive() async throws -> Data {
+        guard !closed else { throw ConnectionError.closed }
+        let frame = try await connection.receiveFrame()
+        guard !closed else { throw ConnectionError.closed }
+        return try transport.decrypt(frame)
     }
 
     /// Ends the session, optionally saying why first.
-    public func close(sending message: Message?) async {
+    public func close(sending message: Message?) {
         guard !closed else { return }
-        if let message {
-            try? await send(message)
-            closed = true
+        closed = true
+        if let message, let frame = try? transport.encrypt(JSON.encode(message)) {
+            _ = connection.enqueue(frame)
             connection.closeGracefully()
         } else {
-            closed = true
             connection.close()
         }
     }
