@@ -152,6 +152,8 @@ struct State {
     in_use: bool,
     /// The newest frame from the Mac; empty until one arrives.
     frame: Vec<u8>,
+    /// When the newest frame arrived.
+    last_push: Instant,
     last_write: Instant,
 }
 
@@ -241,7 +243,7 @@ impl VirtualCamera {
             file,
             format,
             placeholder,
-            state: Mutex::new(State { in_use: false, frame: Vec::new(), last_write: Instant::now() }),
+            state: Mutex::new(State { in_use: false, frame: Vec::new(), last_push: Instant::now(), last_write: Instant::now() }),
             wake: Condvar::new(),
             stop: AtomicBool::new(false),
         });
@@ -281,6 +283,7 @@ impl VirtualCamera {
         let mut state = self.shared.state.lock().unwrap();
         state.frame.clear();
         state.frame.extend_from_slice(frame);
+        state.last_push = Instant::now();
         if state.in_use {
             self.shared.write(frame, &mut state);
         }
@@ -368,19 +371,25 @@ fn watch_usage(shared: &Shared, on_usage: impl Fn(bool)) {
     }
 }
 
-/// While an app streams, makes sure it gets a frame at least every frame
-/// interval: the newest frame again if the Mac's stream stalls, or the
-/// placeholder until the first frame arrives. Apps treat a camera that
-/// sends nothing as broken.
+/// While an app streams, makes sure it keeps getting frames: the
+/// placeholder at the frame rate until the Mac's first frame arrives, and the
+/// newest frame again if the Mac's stream stalls. Apps treat a camera that
+/// sends nothing as broken. A frame that is merely a little late (network
+/// jitter) is not a stall: repeating the old one just before it would stutter.
 fn keep_frames(shared: &Shared) {
     let interval = shared.format.frame_interval();
+    let stall = (interval * 5 / 2).max(Duration::from_millis(100));
     let mut state = shared.state.lock().unwrap();
     while !shared.stop.load(Ordering::Relaxed) {
         if !state.in_use {
             state = shared.wake.wait_timeout(state, Duration::from_millis(500)).unwrap().0;
             continue;
         }
-        let due = state.last_write + interval;
+        let due = if state.frame.is_empty() {
+            state.last_write + interval
+        } else {
+            (state.last_push + stall).max(state.last_write + interval)
+        };
         let now = Instant::now();
         if now >= due {
             let frame = std::mem::take(&mut state.frame);
