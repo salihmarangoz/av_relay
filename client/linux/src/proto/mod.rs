@@ -69,9 +69,9 @@ pub struct VideoFormat {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct IceCandidate {
     pub candidate: String,
-    #[serde(rename = "sdpMid")]
+    #[serde(rename = "sdpMid", default)]
     pub sdp_mid: Option<String>,
-    #[serde(rename = "sdpMLineIndex")]
+    #[serde(rename = "sdpMLineIndex", default)]
     pub sdp_mline_index: u32,
 }
 
@@ -194,6 +194,9 @@ mod tests {
         let ServerMsg::MediaState { video, audio } = state else { panic!() };
         assert_eq!(video.state, CaptureState::On);
         assert_eq!(audio.error.as_deref(), Some("permission-denied"));
+
+        let bare: ServerMsg = serde_json::from_str(r#"{"type":"ice","candidate":""}"#).unwrap();
+        assert!(matches!(bare, ServerMsg::Ice(IceCandidate { sdp_mid: None, sdp_mline_index: 0, .. })));
 
         let future: ServerMsg = serde_json::from_str(r#"{"type":"something-new","x":1}"#).unwrap();
         assert_eq!(future, ServerMsg::Unknown);

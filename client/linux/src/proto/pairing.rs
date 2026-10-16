@@ -157,8 +157,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin> PairingAttempt<S> {
         write_frame(s, &serde_json::to_vec(&msg).map_err(io::Error::from)?).await?;
 
         let reply = read_plaintext(s).await?;
-        if let Some(code) = plaintext_error(&reply) {
-            return Err(PairError::Protocol(format!("error {code}")));
+        // The window may have closed while the user typed, or someone else's
+        // attempt got there first.
+        match plaintext_error(&reply) {
+            Some("not-pairing") => return Err(PairError::NotPairing),
+            Some("busy") => return Err(PairError::Busy),
+            Some(code) => return Err(PairError::Protocol(format!("error {code}"))),
+            None => {}
         }
         if reply["type"] != "cpace" {
             return Err(PairError::Protocol(format!("expected cpace, got {}", reply["type"])));
@@ -194,7 +199,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin> PairingAttempt<S> {
         // A Mac that used another code can't decrypt message 3 and hangs up.
         let paired = match read_frame(s).await {
             Ok(f) => f,
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Err(PairError::Failed),
+            Err(e) if matches!(e.kind(), io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionReset) => {
+                return Err(PairError::Failed);
+            }
             Err(e) => return Err(e.into()),
         };
         let n = noise.read_message(&paired, &mut buf)?;
