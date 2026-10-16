@@ -23,6 +23,12 @@ public struct Hello: Sendable, Equatable {
     public var name: String
     public var app: String
     public var video: VideoFormat?
+
+    public init(name: String, app: String, video: VideoFormat?) {
+        self.name = name
+        self.app = app
+        self.video = video
+    }
 }
 
 public actor RelayServer {
