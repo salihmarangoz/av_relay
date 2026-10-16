@@ -9,6 +9,7 @@
 
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use gst::prelude::*;
@@ -195,6 +196,7 @@ fn remote_description_set(
     profiles: Vec<(String, String)>,
 ) -> Result<()> {
     check_promise(reply)?;
+    tune_rtcp(webrtc);
     let webrtc_answer = webrtc.clone();
     let events = events.clone();
     let promise = gst::Promise::with_change_func(move |reply| {
@@ -218,6 +220,37 @@ fn remote_description_set(
     });
     webrtc.emit_by_name::<()>("create-answer", &[&None::<gst::Structure>, &promise]);
     Ok(())
+}
+
+/// GStreamer 1.24's RTP session (unchanged upstream so far) times its next
+/// regular RTCP report from the last RTCP packet of any kind, and only
+/// regular reports carry report blocks. TWCC feedback goes out as early RTCP
+/// on every video frame, far more often than the regular interval (~0.7 s),
+/// so regular reports, and with them the Mac's loss and RTT figures, never
+/// came. Sending TWCC on a fixed 50 ms interval (as libwebrtc's own receiver
+/// does at these bitrates) and allowing regular reports every 40 ms lets
+/// them interleave: ~26 reports a second with report blocks, ~40 kbit/s of
+/// RTCP in all, nothing on a LAN.
+fn tune_rtcp(webrtc: &gst::Element) {
+    const TWCC_INTERVAL: Duration = Duration::from_millis(50);
+    const RTCP_MIN_INTERVAL: Duration = Duration::from_millis(40);
+    const RTCP_BANDWIDTH: i32 = 1_000_000;
+    let Some(rtpbin) = webrtc.downcast_ref::<gst::Bin>().and_then(|b| b.by_name("rtpbin")) else {
+        return log::warn!("webrtcbin has no rtpbin; RTCP left at its defaults");
+    };
+    // With max-bundle everything is session 0; 1 exists only without bundling.
+    for id in 0u32..2 {
+        let Some(session) = rtpbin.emit_by_name::<Option<gst::glib::Object>>("get-internal-session", &[&id]) else { continue };
+        let has = |name: &str| session.find_property(name).is_some();
+        if has("twcc-feedback-interval") {
+            session.set_property("twcc-feedback-interval", TWCC_INTERVAL.as_nanos() as u64);
+        }
+        if has("rtcp-min-interval") && has("rtcp-rr-bandwidth") && has("rtcp-rs-bandwidth") {
+            session.set_property("rtcp-rr-bandwidth", RTCP_BANDWIDTH);
+            session.set_property("rtcp-rs-bandwidth", RTCP_BANDWIDTH);
+            session.set_property("rtcp-min-interval", RTCP_MIN_INTERVAL.as_nanos() as u64);
+        }
+    }
 }
 
 fn check_promise(reply: Result<Option<&gst::StructureRef>, gst::PromiseError>) -> Result<Option<&gst::StructureRef>> {
