@@ -1,4 +1,6 @@
 mod crypto;
+mod proto;
+mod store;
 mod vcam;
 
 use std::time::{Duration, Instant};
