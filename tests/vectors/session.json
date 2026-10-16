@@ -14,8 +14,8 @@
     "handshake_hash": "e355462f32c18c097e04272446367dfc75d1acb3a6f924356122434699b4f248",
     "transport_c2s_0_plaintext": "{\"type\":\"hello\",\"name\":\"ubuntu-desktop\",\"app\":\"av-relay 0.1.0 linux\",\"video\":{\"width\":1280,\"height\":720,\"fps\":30}}",
     "transport_c2s_0": "a6fc8820eccbe75d27469cd2c450e74911badf3d850835a31aaec56f3b62d052fd3749ceb065f440dcf77a549c2d3b8e1e0c3b7df8e371cbf096a81b807c8d4f33106a62f40d4915cc8892f922ca7d79ff23060cb8344b032c44727597b93541a24d126c988a92ad8ca44cc8cda2681fa1c20beae08f09b4ff4f448cd6872a646e81",
-    "transport_s2c_0_plaintext": "{\"type\":\"welcome\",\"name\":\"MacBook Air\",\"app\":\"AV Relay 0.1.0 macOS\",\"camera\":\"FaceTime HD Camera\",\"mic\":\"MacBook Air Microphones\"}",
-    "transport_s2c_0": "d0970f6c53ed3ef5b3670af09fa2e13e6fb1f214f9b579a87d1cff676bcbb36ec7ca2c1888bd3beb0db4cea1fbb5c6c0379721b2f8a8d3597cec83eca1af9339abee78f818b80fb83469806fbe959e25720aca2526709faddef1de9198bc4af207de8ce6eee8cf29eaef5f448aa1b7de96b520284409660669f2ca7133ce90697da937fac93a6e4b7809750918f5d7447348"
+    "transport_s2c_0_plaintext": "{\"type\":\"welcome\",\"name\":\"MacBook Air\",\"app\":\"AV Relay 0.1.0 macOS\",\"device_id\":\"d69d74eafbec5e49\"}",
+    "transport_s2c_0": "d0970f6c53ed3ef5b3670af09fa2e13e6fb1f214f9b579a87d1cff676bcbb36ec7ca2c1888bd3beb0db4cea1fbb5c6c0379721b2f8a8d3597cec83eca1af9339abee78f818bf0ba338788412edd3fa7e330ba8752f228b80fbb7ff9596ec5da71cd0d37d348832edaee115e78b0ea08a204a37"
   },
   "wire": [
     {
@@ -41,7 +41,7 @@
     {
       "dir": "s2c",
       "what": "welcome",
-      "frame": "0092d0970f6c53ed3ef5b3670af09fa2e13e6fb1f214f9b579a87d1cff676bcbb36ec7ca2c1888bd3beb0db4cea1fbb5c6c0379721b2f8a8d3597cec83eca1af9339abee78f818b80fb83469806fbe959e25720aca2526709faddef1de9198bc4af207de8ce6eee8cf29eaef5f448aa1b7de96b520284409660669f2ca7133ce90697da937fac93a6e4b7809750918f5d7447348"
+      "frame": "0073d0970f6c53ed3ef5b3670af09fa2e13e6fb1f214f9b579a87d1cff676bcbb36ec7ca2c1888bd3beb0db4cea1fbb5c6c0379721b2f8a8d3597cec83eca1af9339abee78f818bf0ba338788412edd3fa7e330ba8752f228b80fbb7ff9596ec5da71cd0d37d348832edaee115e78b0ea08a204a37"
     }
   ]
 }

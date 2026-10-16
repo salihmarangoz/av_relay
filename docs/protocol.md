@@ -252,10 +252,19 @@ If the server can't decrypt message 1 at all (the client holds a stale server
 key, e.g. after the Mac app was reset), it closes; the client shows *"Couldn't
 authenticate the Mac. If AV Relay was reset on the Mac, pair again."*
 
-**One session at a time.** A server serves one client at a time. A new
-session from the client that already has one replaces it (the old one gets
-`bye` with reason `replaced`). A session from another paired client while
-one is active gets `{"type": "error", "code": "busy"}` and is closed.
+**Authenticated only at `hello`.** Anyone on the network can record and
+replay a client's message 1, and the server can't tell a replay apart:
+message 1 proves nothing until the sender shows it holds the matching
+ephemeral key. So a session counts as authenticated only once its first
+transport message, which MUST be `hello`, decrypts. Until then the server
+changes nothing (no `replaced`, no `busy`), and a connection that doesn't
+send a valid `hello` within the handshake timeout is closed.
+
+**One session at a time.** A server serves one client at a time. Once a
+new session is authenticated, if the same client already has a session,
+the new one replaces it (the old one gets `bye` with reason `replaced`); if
+another client has one, the new session gets
+`{"type": "error", "code": "busy"}` and is closed.
 
 ## 7. Control messages
 
@@ -363,9 +372,11 @@ client side runs its own, and it has the far-end reference.
 SHOULD keep transport-cc: it drives the server's congestion control (GCC),
 which adapts the bitrate to the Wi-Fi.
 
-**Bitrate.** The server caps video at 2.5 Mbit/s for 720p30 and 5 Mbit/s
-for 1080p30 (scaled for other sizes), floor 300 kbit/s; Opus runs at about
-40 kbit/s.
+**Bitrate.** The server caps video at 4 Mbit/s for 720p30 and 8 Mbit/s for
+1080p30 (scaled by pixel rate for other formats), floor 300 kbit/s. The
+call app on the client re-encodes our stream, so we start from a clean
+picture; GCC still backs off when the Wi-Fi can't carry it. Opus runs at
+about 40 kbit/s.
 
 ### 8.3 Format
 
@@ -470,7 +481,8 @@ of scope (though the server limits it where cheap, below).
   The Mac shows the paired device's name, and the user can remove it.
 - **Sessions.** Noise IK authenticates both static keys and gives forward
   secrecy once the handshake completes. Only clients in the paired list
-  are served.
+  are served, and only after their `hello` decrypts, so a replayed
+  message 1 can't disturb a live session (section 6).
 - **Media** is protected by DTLS-SRTP keyed through the authenticated SDP.
 - **Before authentication**, the server accepts at most 8 connections at a
   time, limits plaintext frames to 1024 bytes, and enforces the timeouts in

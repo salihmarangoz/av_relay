@@ -328,7 +328,7 @@ def session_vector() -> dict:
     hello = {"type": "hello", "name": "ubuntu-desktop", "app": "av-relay 0.1.0 linux",
              "video": {"width": 1280, "height": 720, "fps": 30}}
     welcome = {"type": "welcome", "name": "MacBook Air", "app": "AV Relay 0.1.0 macOS",
-               "camera": "FaceTime HD Camera", "mic": "MacBook Air Microphones"}
+               "device_id": device_id(server_pub)}
     t_c0 = c.encrypt(compact(hello))
     assert s.decrypt(t_c0) == compact(hello)
     t_s0 = s.encrypt(compact(welcome))
