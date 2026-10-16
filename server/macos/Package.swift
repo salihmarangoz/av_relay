@@ -7,6 +7,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "AVRelayCore", targets: ["AVRelayCore"]),
+        .executable(name: "AVRelay", targets: ["AVRelay"]),
         .executable(name: "avrelay-devserver", targets: ["avrelay-devserver"]),
     ],
     dependencies: [
@@ -34,8 +35,15 @@ let package = Package(
             dependencies: ["AVRelayCore", "CWebRTCSupport", .product(name: "WebRTC", package: "WebRTC")],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
-        // A headless server for development and interop tests: pairing and sessions, no media.
-        .executableTarget(name: "avrelay-devserver", dependencies: ["AVRelayCore"]),
+        // The menu bar app. scripts/build-app.sh wraps it into "AV Relay.app".
+        .executableTarget(
+            name: "AVRelay",
+            dependencies: ["AVRelayCore", "AVRelayMedia"],
+            path: "Sources/AVRelayApp"
+        ),
+        // A headless server for development and interop tests: pairing, sessions, and optionally
+        // the media engine with test sources (no camera or microphone).
+        .executableTarget(name: "avrelay-devserver", dependencies: ["AVRelayCore", "AVRelayMedia"]),
         .testTarget(name: "AVRelayCoreTests", dependencies: ["AVRelayCore"]),
         .testTarget(
             name: "AVRelayMediaTests",

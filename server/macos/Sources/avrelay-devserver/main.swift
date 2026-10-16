@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // A headless AV Relay server for development and interop tests: pairing and
-// sessions as in docs/protocol.md, but no camera, microphone or WebRTC.
-// It answers `media` with made-up states, so a client's on-demand logic can
-// be exercised without the Mac app.
+// sessions as in docs/protocol.md. By default without media: it answers
+// `media` with made-up states, so a client's on-demand logic can be
+// exercised. With --media test, the real media engine (libwebrtc, H.264 and
+// Opus) sends a moving test pattern and a 440 Hz tone instead of the camera
+// and microphone, so a client's WebRTC side can be tested too.
 //
-//   swift run avrelay-devserver [--port 48100] [--dir DIR] [--name NAME]
+//   swift run avrelay-devserver [--port 48100] [--dir DIR] [--name NAME] [--media test]
 //
 // Then type `pair` for a code. Commands: pair, close, list, remove ID, quit.
 
 import AVRelayCore
+import AVRelayMedia
 import Foundation
 
 final class FakeMedia: SessionHandler {
@@ -40,14 +43,18 @@ setvbuf(stdout, nil, _IOLBF, 0)  // line by line, also into a pipe
 var port: UInt16 = 48100
 var directory = FileManager.default.temporaryDirectory.appendingPathComponent("av-relay-devserver")
 var name = Host.current().localizedName ?? "Mac"
+var testMedia = false
 var arguments = CommandLine.arguments.dropFirst()
 while let flag = arguments.popFirst() {
     switch flag {
     case "--port": port = UInt16(arguments.popFirst() ?? "") ?? port
     case "--dir": directory = URL(fileURLWithPath: arguments.popFirst() ?? directory.path)
     case "--name": name = arguments.popFirst() ?? name
+    case "--media" where arguments.first == "test":
+        arguments.removeFirst()
+        testMedia = true
     default:
-        print("usage: avrelay-devserver [--port N] [--dir DIR] [--name NAME]")
+        print("usage: avrelay-devserver [--port N] [--dir DIR] [--name NAME] [--media test]")
         exit(2)
     }
 }
@@ -56,10 +63,20 @@ let store = try IdentityStore(directory: directory)
 var configuration = RelayServer.Configuration(name: name, app: "AV Relay devserver")
 configuration.port = port
 let server = RelayServer(configuration: configuration, store: store)
-let media = FakeMedia()
-await server.setHandler(media)
+let handler: any SessionHandler
+if testMedia {
+    var settings = MediaEngine.Settings()
+    settings.camera = .testPattern
+    settings.microphone = .testTone
+    let engine = MediaEngine(settings: settings)
+    engine.onStatus = { status in print("media: camera \(status.video.state), microphone \(status.audio.state)") }
+    handler = engine
+} else {
+    handler = FakeMedia()
+}
+await server.setHandler(handler)
 let listening = try await server.start()
-print("AV Relay dev server: TCP \(listening), device id \(store.deviceID), state in \(directory.path)")
+print("AV Relay dev server: TCP \(listening), device id \(store.deviceID), state in \(directory.path), media: \(testMedia ? "test pattern + tone" : "none")")
 print("commands: pair, close, list, remove ID, quit")
 
 Task {
