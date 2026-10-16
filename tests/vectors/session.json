@@ -1,0 +1,47 @@
+{
+  "description": "One session handshake and the first message each way (docs/protocol.md, 'Session').",
+  "noise": {
+    "protocol": "Noise_IK_25519_ChaChaPoly_SHA256",
+    "prologue": "61762d72656c61792f312073657373696f6e",
+    "client_static_private": "f24e1cc2abf716c643067449e2c2bc6e4094a3eb54bb33b94d0c960e6fb87a31",
+    "client_static_public": "0601967674ce29750f8e238f6a5d45532e1ae560b5f437582fb2062381319139",
+    "server_static_private": "35256a8697832694aabd27495138efa716323c6223fb4f1227c13e762ecaf0ff",
+    "server_static_public": "c2ba684ff6d401fc8585e8076a14b925b8aab143c5414a112b076aac6102857f",
+    "client_ephemeral_private": "738a66900b3e733f28aff0ff539573f54a1baeace067892090ab4999389e8574",
+    "server_ephemeral_private": "f845893dfbece70c820e03b13aaaace6dae7eb8c26edb7c81047e2a250994a02",
+    "msg1": "8395c70fd1c3df892545100401d184b69b65444887b451eba8e6ea0b19a89565d64345f6e816738dfd690f4956f9ae0ef83cf3bce8702d65c6b7d16151245d8a2b8756e6ac4bad3f2050593d97bcc216113b35ab46a949623999032ce6767f2d",
+    "msg2": "c4f701a7a9fab56adc141c2578a27379a62a3a5578a810a5075465559ddef13bcfd11770b58eaa9847eca402da3173f8",
+    "handshake_hash": "e355462f32c18c097e04272446367dfc75d1acb3a6f924356122434699b4f248",
+    "transport_c2s_0_plaintext": "{\"type\":\"hello\",\"name\":\"ubuntu-desktop\",\"app\":\"av-relay 0.1.0 linux\",\"video\":{\"width\":1280,\"height\":720,\"fps\":30}}",
+    "transport_c2s_0": "a6fc8820eccbe75d27469cd2c450e74911badf3d850835a31aaec56f3b62d052fd3749ceb065f440dcf77a549c2d3b8e1e0c3b7df8e371cbf096a81b807c8d4f33106a62f40d4915cc8892f922ca7d79ff23060cb8344b032c44727597b93541a24d126c988a92ad8ca44cc8cda2681fa1c20beae08f09b4ff4f448cd6872a646e81",
+    "transport_s2c_0_plaintext": "{\"type\":\"welcome\",\"name\":\"MacBook Air\",\"app\":\"AV Relay 0.1.0 macOS\",\"camera\":\"FaceTime HD Camera\",\"mic\":\"MacBook Air Microphones\"}",
+    "transport_s2c_0": "d0970f6c53ed3ef5b3670af09fa2e13e6fb1f214f9b579a87d1cff676bcbb36ec7ca2c1888bd3beb0db4cea1fbb5c6c0379721b2f8a8d3597cec83eca1af9339abee78f818b80fb83469806fbe959e25720aca2526709faddef1de9198bc4af207de8ce6eee8cf29eaef5f448aa1b7de96b520284409660669f2ca7133ce90697da937fac93a6e4b7809750918f5d7447348"
+  },
+  "wire": [
+    {
+      "dir": "c2s",
+      "what": "preamble",
+      "frame": "00317b2270726f746f223a2261762d72656c6179222c2276657273696f6e223a312c226d6f6465223a2273657373696f6e227d"
+    },
+    {
+      "dir": "c2s",
+      "what": "noise msg1",
+      "frame": "00608395c70fd1c3df892545100401d184b69b65444887b451eba8e6ea0b19a89565d64345f6e816738dfd690f4956f9ae0ef83cf3bce8702d65c6b7d16151245d8a2b8756e6ac4bad3f2050593d97bcc216113b35ab46a949623999032ce6767f2d"
+    },
+    {
+      "dir": "s2c",
+      "what": "noise msg2",
+      "frame": "0030c4f701a7a9fab56adc141c2578a27379a62a3a5578a810a5075465559ddef13bcfd11770b58eaa9847eca402da3173f8"
+    },
+    {
+      "dir": "c2s",
+      "what": "hello",
+      "frame": "0082a6fc8820eccbe75d27469cd2c450e74911badf3d850835a31aaec56f3b62d052fd3749ceb065f440dcf77a549c2d3b8e1e0c3b7df8e371cbf096a81b807c8d4f33106a62f40d4915cc8892f922ca7d79ff23060cb8344b032c44727597b93541a24d126c988a92ad8ca44cc8cda2681fa1c20beae08f09b4ff4f448cd6872a646e81"
+    },
+    {
+      "dir": "s2c",
+      "what": "welcome",
+      "frame": "0092d0970f6c53ed3ef5b3670af09fa2e13e6fb1f214f9b579a87d1cff676bcbb36ec7ca2c1888bd3beb0db4cea1fbb5c6c0379721b2f8a8d3597cec83eca1af9339abee78f818b80fb83469806fbe959e25720aca2526709faddef1de9198bc4af207de8ce6eee8cf29eaef5f448aa1b7de96b520284409660669f2ca7133ce90697da937fac93a6e4b7809750918f5d7447348"
+    }
+  ]
+}

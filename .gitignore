@@ -1,0 +1,10 @@
+.DS_Store
+.venv*/
+__pycache__/
+# Mac build output
+server/macos/.build/
+server/macos/build/
+*.xcuserstate
+xcuserdata/
+# Linux build output
+client/linux/target/
