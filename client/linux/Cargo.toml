@@ -1,0 +1,19 @@
+[package]
+name = "av-relay"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "Use a MacBook's camera and microphone on Ubuntu as a virtual webcam and mic"
+repository = "https://github.com/salihmarangoz/av_relay_mac_to_linux"
+publish = false
+
+[dependencies]
+anyhow = "1"
+libc = "0.2"
+log = "0.4"
+env_logger = "0.11"
+nix = { version = "0.31", features = ["ioctl", "poll", "fs"] }
+
+[profile.release]
+lto = "thin"
+

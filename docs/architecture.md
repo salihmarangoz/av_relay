@@ -113,7 +113,7 @@ owns the details below; this is the agreed shape.
 | Pair dialog | GTK4: IP and port first, then the 6-digit code |
 | Control client | framing, Noise (`snow`), CPace (`curve25519-dalek`), keepalive, reconnect (last address, then Bonjour via Avahi) |
 | Media | GStreamer `webrtcbin` (answerer): H.264 decode → scale/convert → virtual camera; Opus decode → virtual microphone |
-| Virtual camera | `v4l2loopback` device named "MacBook Camera", `exclusive_caps=1`: apps list it only while AV Relay writes to it, i.e. while the Mac is connected. Placeholder frames until the Mac's first frame arrives. |
+| Virtual camera | a `v4l2loopback` device named "MacBook Camera" (`/dev/video48` when free), created at startup through v4l2loopback's control device, with exclusive caps: apps list it only while AV Relay writes to it, i.e. while the Mac is connected. Placeholder frames until the Mac's first frame arrives. Needs v4l2loopback 0.13 or newer for the client-usage event. |
 | Virtual microphone | a PipeWire `Audio/Source` node, "MacBook Microphone" |
 | Device watcher | sees when an app opens the camera (v4l2loopback's client-usage event) or records from the microphone (the PipeWire node starts running), and sends `media` |
 | Defaults | below |
@@ -163,7 +163,9 @@ Release on every `v*` tag:
 - **macOS** (macOS runner): build the app, ad-hoc sign it, publish
   `AV-Relay-<version>-macOS.zip` and `.dmg`.
 - **Linux** (`ubuntu-24.04` runner): build the Rust app and the `.deb`
-  (dependencies include GStreamer's WebRTC plugins and `v4l2loopback-dkms`).
+  (dependencies include GStreamer's WebRTC plugins and v4l2loopback 0.13+;
+  Ubuntu 24.04's own `v4l2loopback-dkms` is 0.12.7, which is too old, so the
+  package and the app check the version and say what to install).
 - Both run their unit tests, including the `tests/vectors` checks, before
   packaging.
 
