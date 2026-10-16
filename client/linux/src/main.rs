@@ -1,3 +1,4 @@
+mod crypto;
 mod vcam;
 
 use std::time::{Duration, Instant};
