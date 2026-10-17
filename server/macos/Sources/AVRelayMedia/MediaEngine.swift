@@ -66,6 +66,25 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
     /// the camera or microphone, not even events still queued for a session
     /// that has just ended.
     private var suspended = false
+    /// Sends libwebrtc's own log to the system log, from now on: warnings and
+    /// errors kept, the rest at info level (diagnostics: `log stream --info`).
+    /// For the app; tests leave it off, as libwebrtc then also writes to stderr.
+    public static func forwardWebRTCLog() { _ = webrtcLog }
+
+    private static let webrtcLog: RTCCallbackLogger = {
+        let logger = RTCCallbackLogger()
+        let log = Logger(subsystem: "io.github.salihmarangoz.avrelay", category: "webrtc")
+        logger.severity = .info
+        logger.start { message, severity in
+            let line = message.trimmingCharacters(in: .whitespacesAndNewlines)
+            if severity == .info {
+                log.info("\(line, privacy: .public)")
+            } else {
+                log.notice("\(line, privacy: .public)")
+            }
+        }
+        return logger
+    }()
 
     public init(settings: Settings = Settings()) {
         self.settings = settings
@@ -122,7 +141,8 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
         }
         for v in values("outbound-rtp", kind: "video") {
             lines.append("video out: " + show(v, ["frameWidth", "frameHeight", "framesPerSecond", "framesEncoded", "keyFramesEncoded",
-                                                 "targetBitrate", "qualityLimitationReason", "nackCount", "pliCount", "firCount",
+                                                 "targetBitrate", "qualityLimitationReason", "qualityLimitationResolutionChanges",
+                                                 "hugeFramesSent", "nackCount", "pliCount", "firCount",
                                                  "retransmittedPacketsSent", "encoderImplementation"]))
         }
         for v in values("outbound-rtp", kind: "audio") {

@@ -51,6 +51,7 @@ public enum SelfTest {
         let start = client.frames.count
         let capturedStart = engine.cameraFramesCaptured
         let audioStart = await client.inbound("audio").packets
+        let keyFramesStart = await keyFramesEncoded(engine)
         try? await Task.sleep(for: .seconds(3))
         let fps = Double(client.frames.count - start) / 3
         let cameraFPS = Double(engine.cameraFramesCaptured - capturedStart) / 3
@@ -69,6 +70,10 @@ public enum SelfTest {
         report.check(client.frames.size == CGSize(width: format.width, height: format.height),
                      "video size \(Int(client.frames.size.width))x\(Int(client.frames.size.height)), asked \(format.width)x\(format.height)")
         report.note("encoder: \(outbound?.values["encoderImplementation"] as? String ?? "?"), limited by: \(outbound?.values["qualityLimitationReason"] as? String ?? "?")")
+        // Nobody asks for a keyframe here. VideoToolbox still adds one about every second in
+        // some sessions, on its own (libwebrtc asks for one every 7200 frames): a note, not a fault.
+        let keyFrames = await keyFramesEncoded(engine) - keyFramesStart
+        report.note("video: \(keyFrames) keyframes in 3 s without a request")
         report.check(packets >= 100, "audio: \(packets) Opus packets in 3 s")
         report.note(String(format: "microphone level: %.3f (0 = silence, 1 = full scale)", level))
         report.check(engine.microphoneIsRecording, "microphone recording while wanted")
@@ -77,5 +82,11 @@ public enum SelfTest {
         report.check(await waitUntil(5) { client.lastState().map { $0.video == .off && $0.audio == .off } == true }, "both off after the linger")
         report.check(await waitUntil(5) { !engine.microphoneIsRecording }, "microphone closed once off")
         return report
+    }
+
+    private static func keyFramesEncoded(_ engine: MediaEngine) async -> Int {
+        let stats = await engine.statistics()
+        let outbound = stats?.statistics.values.first { $0.type == "outbound-rtp" && $0.values["kind"] as? String == "video" }
+        return (outbound?.values["keyFramesEncoded"] as? NSNumber)?.intValue ?? 0
     }
 }
