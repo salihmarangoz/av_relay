@@ -137,20 +137,21 @@ pub fn run(at_login: bool) -> Result<()> {
     gtk::Window::set_default_icon_name(APP_ID);
 
     // Started at login with "Start minimized": the launch's own activation
-    // shows nothing (the tray icon is there); later ones do.
+    // shows nothing once paired (the tray icon is there); later ones do.
     let quiet = std::cell::Cell::new(at_login && settings.start_minimized);
     app.connect_activate({
         let ui = ui.clone();
         move |_| {
-            if quiet.replace(false) {
+            let paired = ui.core.store().paired_sender().ok().flatten().is_some();
+            if quiet.replace(false) && paired {
                 return;
             }
             // Launched from the app grid (or again while running): show
             // something. Not paired: the pairing window; else the status.
-            if ui.core.store().paired_sender().ok().flatten().is_none() {
-                pair::show(&ui);
-            } else {
+            if paired {
                 status::show(&ui);
+            } else {
+                pair::show(&ui);
             }
         }
     });
@@ -289,9 +290,12 @@ async fn tray_host_gone(ui: Rc<Ui>) {
     const GRACE: Duration = Duration::from_secs(10);
     const STEP: Duration = Duration::from_secs(1);
     let mut gone = Duration::ZERO;
+    let mut locked = false;
     while gone < GRACE {
-        glib::timeout_future(STEP).await;
-        gone = if screen_locked().await { Duration::ZERO } else { gone + STEP };
+        // Locked, it can be all night: ask less often.
+        glib::timeout_future(if locked { 5 * STEP } else { STEP }).await;
+        locked = screen_locked().await;
+        gone = if locked { Duration::ZERO } else { gone + STEP };
     }
     log::warn!("no tray host (on GNOME: the Ubuntu AppIndicators extension); showing the status window");
     ui.tray_watch.take();

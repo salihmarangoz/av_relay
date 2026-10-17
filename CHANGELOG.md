@@ -12,9 +12,9 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Receiver: **Start minimized**, on by default. At login AV Relay shows only
-  its icon in the top bar and opens no window; opening it from the app grid
-  still shows the window.
+- Receiver: **Start minimized**, on by default. At login a paired AV Relay
+  shows only its icon in the top bar and opens no window; opening it from
+  the app grid still shows the window.
 
 ### Fixed
 

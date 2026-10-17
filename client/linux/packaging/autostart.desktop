@@ -8,6 +8,6 @@ Icon=io.github.salihmarangoz.avrelay
 Terminal=false
 Categories=AudioVideo;Video;Audio;Network;
 Keywords=camera;webcam;microphone;mic;relay;mac;macbook;video call;
-StartupNotify=true
+StartupNotify=false
 SingleMainWindow=true
 X-GNOME-Autostart-enabled=true

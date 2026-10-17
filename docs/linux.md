@@ -94,9 +94,10 @@ in the AV Relay window); this writes
 `~/.config/autostart/io.github.salihmarangoz.avrelay.desktop`, which
 overrides the system entry. Ticking it again removes the override.
 
-At login AV Relay starts minimized: only its icon appears in the top bar.
-To have its window open too, untick **Start minimized**. Opening AV Relay
-from the app grid always shows the window.
+Once paired, AV Relay starts minimized at login: only its icon appears in
+the top bar. To have its window open too, untick **Start minimized**. (Not
+paired yet, it opens the pairing window.) Opening AV Relay from the app grid
+always shows the window.
 
 ## Troubleshooting
 
