@@ -140,6 +140,35 @@ enum Hardware {
     }
 }
 
+@Suite(.serialized) struct SleepTests {
+    /// Review T14: after stopAll() (before sleep), events still queued for the
+    /// ended session must not start a call or a device; after resume() they may.
+    @Test func nothingStartsBetweenStopAllAndResume() async throws {
+        var settings = MediaEngine.Settings()
+        settings.camera = .testPattern
+        settings.microphone = .testTone
+        let engine = MediaEngine(settings: settings)
+        let client = LoopbackClient(engine: engine)
+        defer {
+            engine.end(channel: client)
+            client.peer.close()
+        }
+        await engine.stopAll()
+        engine.start(channel: client, hello: Hello(name: "test", app: "test", video: VideoFormat(width: 640, height: 480, fps: 30)))
+        engine.receive(.media(video: true, audio: true), from: client)
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(client.offers == 0)
+        #expect(engine.cameraFramesCaptured == 0)
+        #expect(!engine.microphoneIsRecording)
+
+        engine.resume()
+        engine.start(channel: client, hello: Hello(name: "test", app: "test", video: VideoFormat(width: 640, height: 480, fps: 30)))
+        #expect(await waitUntil { client.connected })
+        engine.receive(.media(video: true, audio: false), from: client)
+        #expect(await waitUntil { client.frames.count > 5 })
+    }
+}
+
 @Suite struct MediaUnitTests {
     @Test func levelIsRaisedTo5_1() {
         func raised(_ id: String) -> String? {

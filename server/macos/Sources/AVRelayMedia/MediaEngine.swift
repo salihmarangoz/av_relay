@@ -62,6 +62,10 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
     private let videoSource: RTCVideoSource
     private let camera: CameraCapture
     private var call: Call?
+    /// Between stopAll() and resume(): the Mac sleeps, and nothing may open
+    /// the camera or microphone, not even events still queued for a session
+    /// that has just ended.
+    private var suspended = false
 
     public init(settings: Settings = Settings()) {
         self.settings = settings
@@ -80,9 +84,11 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
 
     /// Ends the call and returns once the camera and microphone are closed:
     /// the Mac is about to sleep, and must not resume capture on wake.
+    /// Nothing starts again until resume().
     public func stopAll() async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             queue.async { [self] in
+                suspended = true
                 call?.close()
                 call = nil
                 camera.stopNow()
@@ -169,8 +175,17 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
 
     // MARK: Entry points (any SignalingChannel)
 
+    /// The Mac is awake: sessions may use the camera and microphone again.
+    public func resume() {
+        queue.async { [self] in suspended = false }
+    }
+
     func start(channel: SignalingChannel, hello: Hello) {
         queue.async { [self] in
+            guard !suspended else {
+                log.info("not starting a call: going to sleep")
+                return
+            }
             call?.close()
             call = Call(engine: self, channel: channel, format: Self.validated(hello.video))
             call?.start()
@@ -442,6 +457,7 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
         }
 
         private func begin(_ kind: Kind) {
+            guard !engine.suspended else { return }
             setState(kind, DeviceState(state: .starting))
             let needsPermission: Bool
             switch kind {

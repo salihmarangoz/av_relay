@@ -132,7 +132,10 @@ final class AppModel: ObservableObject {
                 proceed()
             }
         }, didWake: { [weak self] in
-            Task { @MainActor in await self?.server?.resume() }
+            Task { @MainActor in
+                self?.engine.resume()
+                await self?.server?.resume()
+            }
         })
         systemObservers.append(NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
