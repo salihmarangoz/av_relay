@@ -116,7 +116,14 @@ pub fn media_test(args: &[String]) -> Result<()> {
     vcam::check_loopback()?;
     let nr = vcam::ensure_device(vcam::CARD_LABEL)?;
     let format = vcam::CameraFormat { width: 1920, height: 1080, fps: 30 };
-    let cam = Arc::new(vcam::VirtualCamera::open(nr, format, |u| log::info!("camera in use: {u}"))?);
+    // The camera may be busy (the app is running): carry on without it.
+    let cam = match vcam::VirtualCamera::open(nr, format, |u| log::info!("camera in use: {u}")) {
+        Ok(c) => Some(Arc::new(c)),
+        Err(e) => {
+            log::warn!("no virtual camera for this test: {e:#}");
+            None
+        }
+    };
     let pw = PipeWire::start()?;
     let feed = Arc::new(pw.start_mic(|u| log::info!("mic in use: {u}"))?);
 
@@ -137,7 +144,9 @@ pub fn media_test(args: &[String]) -> Result<()> {
                 let frames = frames.clone();
                 move |f| {
                     frames.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    cam.push_frame(f)
+                    if let Some(cam) = &cam {
+                        cam.push_frame(f)
+                    }
                 }
             }),
             audio: Box::new({
@@ -238,6 +247,9 @@ pub fn media_test(args: &[String]) -> Result<()> {
         }
         if last_report.elapsed() >= Duration::from_secs(5) {
             last_report = Instant::now();
+            for s in receiver.stats() {
+                println!("  {s:?}");
+            }
             println!(
                 "after {:>2}s: {} video frames, {:.1} s of audio decoded",
                 start.elapsed().as_secs(),

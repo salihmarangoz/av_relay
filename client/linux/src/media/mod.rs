@@ -24,10 +24,16 @@ const TWCC_URI: &str = "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide
 /// H.264 level 5.1: what the client decodes (protocol.md 8.2).
 const H264_RECEIVE_LEVEL: &str = "33";
 
-/// Jitter buffer depth. On a LAN a retransmission takes a few ms, so this
-/// leaves room for several NACK rounds and Wi-Fi hiccups without adding much
-/// delay.
+/// Jitter buffer depth for audio, where it only has to put packets back in
+/// order: audio's cushion against Wi-Fi stalls is the mic's own queue
+/// (audio/playout.rs). Video waits longer (`VIDEO_MIN_LATENCY_MS`, and as
+/// long as the audio waits, see `Receiver::set_video_delay`).
 const JITTER_BUFFER_MS: u32 = 60;
+/// Video's jitter buffer is never shorter than this: over Wi-Fi, packets
+/// often come ~100 ms late, and each one given up on costs a keyframe.
+const VIDEO_MIN_LATENCY_MS: u32 = 100;
+/// At most one keyframe request per this long.
+const KEYFRAME_REQUEST_EVERY: Duration = Duration::from_millis(500);
 
 #[derive(Debug)]
 pub enum MediaEvent {
@@ -50,12 +56,75 @@ pub struct Sinks {
     pub audio: Box<dyn Fn(&[f32]) + Send + Sync>,
 }
 
+/// One received stream's counters, from the RTP session and the stream's
+/// jitter buffer. They count from the start of the session.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InboundStats {
+    pub ssrc: u32,
+    pub video: bool,
+    pub packets_received: u64,
+    pub packets_lost: i64,
+    /// RTP interarrival jitter, in milliseconds.
+    pub jitter_ms: f64,
+    /// Feedback sent to the sender: NACKs (retransmission requests) and
+    /// PLIs/FIRs (keyframe requests).
+    pub nacks: u64,
+    pub plis: u64,
+    /// Packets the jitter buffer gave up waiting for, packets that came
+    /// after it had given up, and retransmissions it asked for and got.
+    pub jb_lost: u64,
+    pub jb_late: u64,
+    pub rtx_requests: u64,
+    pub rtx_ok: u64,
+}
+
+/// The received streams' jitter buffers, by SSRC, and which SSRCs are video.
+#[derive(Default)]
+struct Streams {
+    jitter_buffers: Vec<(u32, gst::glib::WeakRef<gst::Element>)>,
+    video: Vec<u32>,
+}
+
+impl Streams {
+    /// webrtcbin turns retransmission requests on only when it can map a
+    /// stream to its transceiver, which fails with bundling (the jitter
+    /// buffers come up with do-retransmission off). Video is negotiated with
+    /// NACK and RTX, so turn it on here once a stream is known to be video,
+    /// for gaps only, and give it video's minimum latency. By default the
+    /// jitter buffer also expects each next packet on time and gives up on
+    /// it at the deadline; Wi-Fi often holds everything back for 100-300 ms,
+    /// and those packets, declared lost and then thrown away on arrival,
+    /// broke the picture and set off keyframe requests.
+    fn set_up_video(&self) {
+        for (ssrc, jb) in &self.jitter_buffers {
+            if let Some(jb) = jb.upgrade().filter(|_| self.video.contains(ssrc)) {
+                if !jb.property::<bool>("do-retransmission") {
+                    jb.set_property("rtx-next-seqnum", false);
+                    jb.set_property("do-retransmission", true);
+                    jb.set_property("latency", jb.property::<u32>("latency").max(VIDEO_MIN_LATENCY_MS));
+                    log::debug!("video jitter buffer for ssrc {ssrc}: retransmission requests on");
+                }
+            }
+        }
+    }
+}
+
+fn uint(s: &gst::StructureRef, field: &str) -> u64 {
+    s.get::<u64>(field)
+        .or_else(|_| s.get::<u32>(field).map(u64::from))
+        .or_else(|_| s.get::<i64>(field).map(|v| v.max(0) as u64))
+        .or_else(|_| s.get::<i32>(field).map(|v| v.max(0) as u64))
+        .unwrap_or(0)
+}
+
 pub struct Receiver {
     pipeline: gst::Pipeline,
     webrtc: gst::Element,
     video: gst_webrtc::WebRTCRTPTransceiver,
     audio: gst_webrtc::WebRTCRTPTransceiver,
     events: Arc<dyn Fn(MediaEvent) + Send + Sync>,
+    rtpbin: Option<gst::Element>,
+    streams: Arc<Mutex<Streams>>,
 }
 
 impl Receiver {
@@ -77,6 +146,30 @@ impl Receiver {
             .build()
             .context("webrtcbin is missing (install gstreamer1.0-plugins-bad and gstreamer1.0-nice)")?;
         pipeline.add(&webrtc)?;
+
+        // Each received stream gets a jitter buffer; keep them for stats().
+        let rtpbin = webrtc.downcast_ref::<gst::Bin>().and_then(|b| b.by_name("rtpbin"));
+        let streams = Arc::new(Mutex::new(Streams::default()));
+        if let Some(rtpbin) = &rtpbin {
+            rtpbin.connect("new-jitterbuffer", true, {
+                let streams = streams.clone();
+                move |values| {
+                    let jb = values[1].get::<gst::Element>().ok()?;
+                    let ssrc = values[3].get::<u32>().ok()?;
+                    log::debug!(
+                        "jitter buffer for ssrc {ssrc}: latency {} ms, do-lost {}, do-retransmission {}, mode {:?}",
+                        jb.property::<u32>("latency"),
+                        jb.property::<bool>("do-lost"),
+                        jb.property::<bool>("do-retransmission"),
+                        jb.property_value("mode"),
+                    );
+                    let mut streams = streams.lock().unwrap();
+                    streams.jitter_buffers.push((ssrc, jb.downgrade()));
+                    streams.set_up_video();
+                    None
+                }
+            });
+        }
 
         let ice = webrtc.property::<gst::glib::Object>("ice-agent");
         ice.set_property("ice-tcp", false);
@@ -119,10 +212,17 @@ impl Receiver {
         webrtc.connect_pad_added({
             let pipeline = pipeline.downgrade();
             let events = events.clone();
+            let streams = streams.clone();
             move |_, pad| {
                 let Some(pipeline) = pipeline.upgrade() else { return };
-                if let Err(e) = add_decoder(&pipeline, pad, video, &sinks) {
-                    events(MediaEvent::Error(format!("setting up a decoder: {e:#}")));
+                match add_decoder(&pipeline, pad, video, &sinks) {
+                    Ok(Some(ssrc)) => {
+                        let mut streams = streams.lock().unwrap();
+                        streams.video.push(ssrc);
+                        streams.set_up_video();
+                    }
+                    Ok(None) => {}
+                    Err(e) => events(MediaEvent::Error(format!("setting up a decoder: {e:#}"))),
                 }
             }
         });
@@ -145,12 +245,13 @@ impl Receiver {
         });
 
         pipeline.set_state(gst::State::Playing).context("starting the media pipeline")?;
-        Ok(Self { pipeline, webrtc, video: video_t, audio: audio_t, events })
+        Ok(Self { pipeline, webrtc, video: video_t, audio: audio_t, events, rtpbin, streams })
     }
 
     /// Takes the Mac's offer and answers it (the answer comes back as
     /// [`MediaEvent::Answer`]).
     pub fn handle_offer(&self, sdp: &str) -> Result<()> {
+        log::debug!("offer:\n{sdp}");
         let offer = gst_sdp::SDPMessage::parse_buffer(sdp.as_bytes()).map_err(|_| anyhow!("the offer isn't valid SDP"))?;
         // webrtcbin answers only the header extensions its codec preferences
         // list, and without transport-cc the Mac's congestion control (GCC)
@@ -170,6 +271,68 @@ impl Receiver {
         });
         self.webrtc.emit_by_name::<()>("set-remote-description", &[&offer, &promise]);
         Ok(())
+    }
+
+    /// The received streams' statistics, audio first. Read from the RTP
+    /// session and the jitter buffers: webrtcbin's own get-stats mixes the
+    /// streams up when they are bundled.
+    pub fn stats(&self) -> Vec<InboundStats> {
+        let Some(session) = self
+            .rtpbin
+            .as_ref()
+            .and_then(|r| r.emit_by_name::<Option<gst::glib::Object>>("get-internal-session", &[&0u32]))
+        else {
+            return Vec::new();
+        };
+        let session_stats = session.property::<gst::Structure>("stats");
+        let sources: Vec<gst::Structure> = session_stats
+            .get::<gst::glib::ValueArray>("source-stats")
+            .map(|a| a.iter().filter_map(|v| v.get::<gst::Structure>().ok()).collect())
+            .unwrap_or_default();
+        let mut streams: Vec<InboundStats> = self
+            .streams
+            .lock()
+            .unwrap()
+            .jitter_buffers
+            .iter()
+            .filter_map(|(ssrc, jb)| {
+                let jb = jb.upgrade()?;
+                let src = sources.iter().find(|s| s.get::<u32>("ssrc") == Ok(*ssrc))?;
+                let clock_rate = src.get::<i32>("clock-rate").unwrap_or(0);
+                let j = jb.property::<gst::Structure>("stats");
+                Some(InboundStats {
+                    ssrc: *ssrc,
+                    video: clock_rate == 90000,
+                    packets_received: uint(src, "packets-received"),
+                    packets_lost: src.get::<i32>("packets-lost").map(i64::from).unwrap_or(0),
+                    jitter_ms: if clock_rate > 0 { uint(src, "jitter") as f64 * 1000.0 / clock_rate as f64 } else { 0.0 },
+                    nacks: uint(src, "sent-nack-count"),
+                    plis: uint(src, "sent-pli-count") + uint(src, "sent-fir-count"),
+                    jb_lost: uint(&j, "num-lost"),
+                    jb_late: uint(&j, "num-late"),
+                    rtx_requests: uint(&j, "rtx-count"),
+                    rtx_ok: uint(&j, "rtx-success-count"),
+                })
+            })
+            .collect();
+        streams.sort_by_key(|s| (s.video, s.ssrc));
+        streams
+    }
+
+    /// Holds video this much longer than audio before decoding it, so it
+    /// stays in step with the microphone's audio, which waits in its own
+    /// queue. The video's jitter buffer does the holding: frames go out at
+    /// their time, and packets that Wi-Fi held back still make it.
+    pub fn set_video_delay(&self, delay: Duration) {
+        let latency = (JITTER_BUFFER_MS + delay.as_millis() as u32).max(VIDEO_MIN_LATENCY_MS);
+        let streams = self.streams.lock().unwrap();
+        for (ssrc, jb) in &streams.jitter_buffers {
+            let Some(jb) = jb.upgrade().filter(|_| streams.video.contains(ssrc)) else { continue };
+            if jb.property::<u32>("latency").abs_diff(latency) >= 5 {
+                log::debug!("video jitter buffer {latency} ms");
+                jb.set_property("latency", latency);
+            }
+        }
     }
 
     /// Adds one of the Mac's ICE candidates; an empty candidate ends them.
@@ -207,6 +370,7 @@ fn remote_description_set(
                 .map_err(|_| anyhow!("create-answer failed: {reply}"))?
                 .get::<gst_webrtc::WebRTCSessionDescription>()?;
             let text = fix_h264_fmtp(&answer.sdp().as_text()?, &profiles);
+            log::debug!("answer:\n{text}");
             let sdp = gst_sdp::SDPMessage::parse_buffer(text.as_bytes()).map_err(|_| anyhow!("re-parsing the answer"))?;
             let answer = gst_webrtc::WebRTCSessionDescription::new(gst_webrtc::WebRTCSDPType::Answer, sdp);
             webrtc_answer.emit_by_name::<()>("set-local-description", &[&answer, &None::<gst::Promise>]);
@@ -356,16 +520,19 @@ fn mid_of(webrtc: &gst::Element, mline: u32) -> Option<String> {
     media.attribute_val("mid").map(str::to_owned)
 }
 
-/// Builds the decoding branch for a new stream from webrtcbin.
-fn add_decoder(pipeline: &gst::Pipeline, pad: &gst::Pad, video: VideoFormat, sinks: &Arc<Sinks>) -> Result<()> {
+/// Builds the decoding branch for a new stream from webrtcbin. Returns the
+/// stream's SSRC if it's video.
+fn add_decoder(pipeline: &gst::Pipeline, pad: &gst::Pad, video: VideoFormat, sinks: &Arc<Sinks>) -> Result<Option<u32>> {
     let caps = pad.current_caps().or_else(|| Some(pad.query_caps(None))).context("the stream has no caps")?;
+    log::debug!("new stream: {caps}");
     let media = caps.structure(0).and_then(|s| s.get::<&str>("media").ok()).unwrap_or_default().to_owned();
+    let ssrc = caps.structure(0).and_then(|s| s.get::<u32>("ssrc").ok());
     let (elements, sink) = match media.as_str() {
         "video" => video_branch(video, sinks.clone())?,
         "audio" => audio_branch(sinks.clone())?,
         other => {
             log::warn!("ignoring a {other} stream");
-            return Ok(());
+            return Ok(None);
         }
     };
     let mut all: Vec<&gst::Element> = elements.iter().collect();
@@ -379,7 +546,7 @@ fn add_decoder(pipeline: &gst::Pipeline, pad: &gst::Pad, video: VideoFormat, sin
     let first = elements.first().context("empty branch")?;
     pad.link(&first.static_pad("sink").context("no sink pad")?)?;
     log::info!("receiving {media}");
-    Ok(())
+    Ok(ssrc.filter(|_| media == "video"))
 }
 
 /// H.264 → decoded → scaled (keeping the aspect ratio) into the camera's
@@ -390,6 +557,71 @@ fn video_branch(video: VideoFormat, sinks: Arc<Sinks>) -> Result<(Vec<gst::Eleme
         .property("request-keyframe", true)
         .property("wait-for-keyframe", true)
         .build()?;
+    // The depayloader asks for "all headers", which the RTP session sends as
+    // a FIR with the same sequence number every time, and the Mac's WebRTC
+    // ignores a FIR it has seen: after the first loss the picture stayed
+    // frozen until the next natural keyframe. Ask with a PLI instead, and
+    // not for every missing packet: each keyframe is a burst of ~100
+    // packets, which a struggling Wi-Fi link doesn't need more of. The
+    // depayloader asks once per loss; if the request or the keyframe is lost
+    // too, ask again until a keyframe comes through.
+    #[derive(Default)]
+    struct Keyframes {
+        last_request: Option<std::time::Instant>,
+        waiting: bool,
+        since: Option<std::time::Instant>,
+    }
+    let keyframes = Arc::new(Mutex::new(Keyframes::default()));
+    let request = || {
+        gst::event::CustomUpstream::new(gst::Structure::builder("GstForceKeyUnit").field("all-headers", false).build())
+    };
+    if let Some(pad) = depay.static_pad("sink") {
+        let state = keyframes.clone();
+        pad.add_probe(gst::PadProbeType::EVENT_UPSTREAM, move |_, info| {
+            if let Some(gst::PadProbeData::Event(event)) = &mut info.data {
+                if event.structure().is_some_and(|s| s.name() == "GstForceKeyUnit") {
+                    let mut state = state.lock().unwrap();
+                    state.waiting = true;
+                    state.since.get_or_insert_with(std::time::Instant::now);
+                    if state.last_request.is_some_and(|t| t.elapsed() < KEYFRAME_REQUEST_EVERY) {
+                        // Swallowed. (Drop would free it twice: GStreamer
+                        // logs a critical for every one.)
+                        return gst::PadProbeReturn::Handled;
+                    }
+                    state.last_request = Some(std::time::Instant::now());
+                    log::debug!("asking for a keyframe");
+                    *event = request();
+                }
+            }
+            gst::PadProbeReturn::Ok
+        });
+        let state = keyframes.clone();
+        pad.add_probe(gst::PadProbeType::BUFFER, move |pad, _| {
+            let again = {
+                let state = state.lock().unwrap();
+                state.waiting && state.last_request.is_none_or(|t| t.elapsed() >= KEYFRAME_REQUEST_EVERY)
+            };
+            if again {
+                pad.push_event(request());
+            }
+            gst::PadProbeReturn::Ok
+        });
+    }
+    if let Some(pad) = depay.static_pad("src") {
+        let state = keyframes.clone();
+        pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+            if let Some(gst::PadProbeData::Buffer(buffer)) = &info.data {
+                if !buffer.flags().contains(gst::BufferFlags::DELTA_UNIT) {
+                    let mut state = state.lock().unwrap();
+                    if let Some(since) = state.since.take() {
+                        log::debug!("keyframe after {} ms", since.elapsed().as_millis());
+                    }
+                    state.waiting = false;
+                }
+            }
+            gst::PadProbeReturn::Ok
+        });
+    }
     let parse = gst::ElementFactory::make("h264parse").build()?;
     // Software decoding: 1080p30 is cheap, and it never wakes a discrete GPU
     // or depends on the driver. Slice threads only: frame threads would

@@ -120,7 +120,26 @@ tree: `client/linux/scripts/devices-test.html`), click **Start**, and pick
 **MacBook Camera** and **MacBook Microphone**. It shows the picture, its
 size and frame rate, and a level meter for the microphone.
 
-**Logs:** start it from a terminal with `RUST_LOG=info av-relay`.
+**Sound or picture drops out now and then.** Usually that's Wi-Fi: a
+computer's Wi-Fi can go quiet for 0.1-0.3 seconds (Macs do it every so
+often, e.g. for AirDrop and Continuity). AV Relay rides it out: after a
+dropout it keeps more sound buffered (up to 0.2 seconds) for a while, holds
+the picture back just as long so lips stay in sync, asks the Mac to resend
+lost video, and lets the buffer shrink again once the network is calm. For
+fewer dropouts, bring the Mac closer to the router or use a cable on either
+side.
+
+**Logs:** started from the app grid or at login, AV Relay logs to the
+journal:
+
+```
+journalctl --user -t io.github.salihmarangoz.avrelay.desktop -f
+```
+
+While an app uses the camera or microphone, a `stats:` line every 10
+seconds shows what arrived (packets lost, recovered by resending, given up
+on), how evenly frames reached the camera, and how often the microphone ran
+dry. Or start it from a terminal with `RUST_LOG=info av-relay`.
 
 ## Uninstall
 

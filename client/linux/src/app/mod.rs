@@ -25,17 +25,21 @@ use anyhow::{Context, Result, anyhow};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, watch};
 
-use crate::audio::{DefaultInput, MicFeed, PipeWire};
-use crate::media::{MediaEvent, Receiver, Sinks};
+use crate::audio::{self, DefaultInput, MicFeed, MicStats, PipeWire};
+use crate::media::{InboundStats, MediaEvent, Receiver, Sinks};
 use crate::proto::pairing::{self, ClientInfo, PairingAttempt};
 use crate::proto::session::{self, SessionError};
 use crate::proto::{CaptureState, ClientMsg, DeviceState, ServerMsg, VideoFormat};
 use crate::store::{PairedMac, Store, hex_encode};
-use crate::vcam::{self, CameraFormat, VirtualCamera};
+use crate::vcam::{self, CamStats, CameraFormat, VirtualCamera};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const WELCOME_TIMEOUT: Duration = Duration::from_secs(10);
 const PING_EVERY: Duration = Duration::from_secs(5);
+/// How often a session logs its media statistics while an app uses a device.
+const STATS_EVERY: Duration = Duration::from_secs(10);
+/// How often the video delay follows the mic's queue (see `video_delay`).
+const SYNC_EVERY: Duration = Duration::from_secs(1);
 const SILENCE_LIMIT: Duration = Duration::from_secs(15);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
 /// While the devices are held for the Mac, someone is likely waiting on it
@@ -685,6 +689,11 @@ async fn serve(
     let mut ping_id = 0u64;
     let mut last_heard = Instant::now();
     let mut media_failed_since: Option<Instant> = None;
+    let mut stats_tick = tokio::time::interval(STATS_EVERY);
+    stats_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut prev_inbound = Vec::<InboundStats>::new();
+    let mut sync_tick = tokio::time::interval(SYNC_EVERY);
+    sync_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             event = events.recv() => {
@@ -746,6 +755,19 @@ async fn serve(
                     return Ok(Ended::Restart);
                 }
             }
+            _ = sync_tick.tick() => {
+                receiver.set_video_delay(video_delay(devices.mic_used(), devices.mic.counters().target_frames()));
+            }
+            _ = stats_tick.tick() => {
+                // Taking them resets the counts, also while nothing is in use.
+                let cam = devices.camera.as_ref().map(|c| c.take_stats());
+                let mic = devices.mic.counters().take();
+                let inbound = receiver.stats();
+                if devices.camera_used() || devices.mic_used() {
+                    log::info!("{}", stats_line(&inbound, &prev_inbound, cam, mic));
+                }
+                prev_inbound = inbound;
+            }
             _ = ping.tick() => {
                 if last_heard.elapsed() > SILENCE_LIMIT {
                     return Err(anyhow!("the Mac stopped answering"));
@@ -777,6 +799,62 @@ async fn serve(
             },
         }
     }
+}
+
+/// How much longer than audio to hold video back: about as long as audio
+/// waits in the mic's queue (which grows on a stalling network), so the two
+/// stay in step. The queue's target counts one chunk for how audio arrives,
+/// and video decoding takes a little longer than audio's, hence the minus.
+/// Without the mic in use, video only waits its own minimum.
+fn video_delay(mic_used: bool, mic_target_frames: u64) -> Duration {
+    const VIDEO_HEAD_START: Duration = Duration::from_millis(30);
+    if !mic_used {
+        return Duration::ZERO;
+    }
+    Duration::from_micros(mic_target_frames * 1_000_000 / audio::RATE as u64).saturating_sub(VIDEO_HEAD_START)
+}
+
+/// One log line about the last `STATS_EVERY`: what arrived over the
+/// network (counts since `prev`), and how the camera and mic were fed.
+fn stats_line(now: &[InboundStats], prev: &[InboundStats], cam: Option<CamStats>, mic: MicStats) -> String {
+    let ms = |frames: u64| frames * 1000 / audio::RATE as u64;
+    let mut line = String::from("stats:");
+    for s in now {
+        let p = prev.iter().find(|p| p.ssrc == s.ssrc).cloned().unwrap_or_default();
+        line += &format!(
+            " {} rx {} lost {} jitter {:.1} ms nack {} pli {} jb-lost {} jb-late {} rtx {}/{} |",
+            if s.video { "video" } else { "audio" },
+            s.packets_received.saturating_sub(p.packets_received),
+            s.packets_lost - p.packets_lost,
+            s.jitter_ms,
+            s.nacks.saturating_sub(p.nacks),
+            s.plis.saturating_sub(p.plis),
+            s.jb_lost.saturating_sub(p.jb_lost),
+            s.jb_late.saturating_sub(p.jb_late),
+            s.rtx_ok.saturating_sub(p.rtx_ok),
+            s.rtx_requests.saturating_sub(p.rtx_requests),
+        );
+    }
+    if let Some(c) = cam {
+        line += &format!(
+            " camera {} frames, {} late, max gap {} ms, {} repeated, {} placeholder |",
+            c.pushed,
+            c.late,
+            c.max_gap.as_millis(),
+            c.repeated,
+            c.placeholder
+        );
+    }
+    line += &format!(
+        " mic {} underruns, {} ms silence, {} ms skipped, {} ms overflow, queue {}/{} ms",
+        mic.underruns,
+        ms(mic.silent_frames),
+        ms(mic.skipped_frames),
+        ms(mic.overflow_samples),
+        ms(mic.fill),
+        ms(mic.target)
+    );
+    line
 }
 
 fn update_device(device: &mut Device, state: &DeviceState) {

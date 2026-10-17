@@ -13,10 +13,11 @@
 
 mod default_input;
 mod dll;
+mod playout;
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -26,10 +27,11 @@ use pipewire as pw;
 use pw::spa;
 use pw::spa::pod::Pod;
 use pw::types::ObjectType;
-use ringbuf::traits::{Consumer, Observer, Producer, Split};
+use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::{HeapCons, HeapProd, HeapRb};
 
 use dll::Dll;
+use playout::Playout;
 
 pub use default_input::DefaultInput;
 
@@ -38,23 +40,66 @@ pub const MIC_DESCRIPTION: &str = "MacBook Microphone";
 pub const RATE: u32 = 48_000;
 const DEFAULT_SOURCE_KEY: &str = "default.configured.audio.source";
 
-/// Audio arrives in 20 ms chunks (Opus frames, paced by the WebRTC jitter
-/// buffer), while the consumer takes one graph quantum per cycle (often
-/// 21 ms, less when an app asks for low latency). Measured just before a
-/// cycle takes its quantum, the queue should hold that quantum, plus one
-/// chunk because chunks arrive whole, plus a little margin. Less underruns
-/// regularly; more only adds latency.
-const CHUNK: usize = RATE as usize / 50;
-const MARGIN: usize = RATE as usize / 100;
-/// Above `target * MAX_FILL_FACTOR` frames queued, drop the excess at once
-/// instead of slowly catching up (e.g. after the consumer stalled).
-const MAX_FILL_FACTOR: usize = 4;
-const RING_CAPACITY: usize = RATE as usize / 2;
-/// Larger errors are clamped, so a burst doesn't yank the resampler.
-const MAX_ERROR: f64 = 256.0;
+/// Room for the largest cushion (see playout.rs) with plenty to spare.
+const RING_CAPACITY: usize = RATE as usize;
+/// Larger errors are clamped, so a burst doesn't yank the resampler. One
+/// chunk: with this the loop speeds up by up to ~0.3%, enough to follow the
+/// cushion as it shrinks (playout.rs) without hearing a change in pitch.
+const MAX_ERROR: f64 = playout::CHUNK as f64;
+
+/// What happened to the microphone's audio, for the stats log.
+#[derive(Default)]
+pub struct MicCounters {
+    /// The app wanted audio and the queue ran dry.
+    pub underruns: AtomicU64,
+    /// Frames of silence played instead of audio (priming, underruns).
+    pub silent_frames: AtomicU64,
+    /// Frames thrown away because too much was queued.
+    pub skipped_frames: AtomicU64,
+    /// Samples the feed couldn't queue (ring full).
+    pub overflow_samples: AtomicU64,
+    /// The queue when the app last took audio, and its target, in frames.
+    pub fill: AtomicU64,
+    pub target: AtomicU64,
+}
+
+/// A snapshot of `MicCounters`, the counts reset by `take()`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MicStats {
+    pub underruns: u64,
+    pub silent_frames: u64,
+    pub skipped_frames: u64,
+    pub overflow_samples: u64,
+    pub fill: u64,
+    pub target: u64,
+}
+
+impl MicCounters {
+    /// The queue's current target, in frames (0 before the mic first ran).
+    pub fn target_frames(&self) -> u64 {
+        self.target.load(Ordering::Relaxed)
+    }
+
+    /// The counts since the last call (which resets them) and the queue now.
+    pub fn take(&self) -> MicStats {
+        MicStats {
+            underruns: self.underruns.swap(0, Ordering::Relaxed),
+            silent_frames: self.silent_frames.swap(0, Ordering::Relaxed),
+            skipped_frames: self.skipped_frames.swap(0, Ordering::Relaxed),
+            overflow_samples: self.overflow_samples.swap(0, Ordering::Relaxed),
+            fill: self.fill.load(Ordering::Relaxed),
+            target: self.target.load(Ordering::Relaxed),
+        }
+    }
+}
 
 enum Cmd {
-    StartMic { consumer: HeapCons<f32>, in_use: Arc<AtomicBool>, on_usage: Box<dyn Fn(bool) + Send> },
+    StartMic {
+        consumer: HeapCons<f32>,
+        in_use: Arc<AtomicBool>,
+        counters: Arc<MicCounters>,
+        on_usage: Box<dyn Fn(bool) + Send>,
+    },
     StopMic,
     /// Sets the configured default input: a node name, or `None` to unset.
     SetDefaultSource(Option<String>),
@@ -73,6 +118,7 @@ pub struct PipeWire {
 pub struct MicFeed {
     producer: Arc<Mutex<HeapProd<f32>>>,
     in_use: Arc<AtomicBool>,
+    counters: Arc<MicCounters>,
 }
 
 impl MicFeed {
@@ -85,8 +131,12 @@ impl MicFeed {
         let mut producer = self.producer.lock().unwrap();
         let pushed = producer.push_slice(samples);
         if pushed < samples.len() {
-            log::debug!("virtual mic ring full; dropped {} samples", samples.len() - pushed);
+            self.counters.overflow_samples.fetch_add((samples.len() - pushed) as u64, Ordering::Relaxed);
         }
+    }
+
+    pub fn counters(&self) -> &MicCounters {
+        &self.counters
     }
 }
 
@@ -110,8 +160,9 @@ impl PipeWire {
     pub fn start_mic(&self, on_usage: impl Fn(bool) + Send + 'static) -> Result<MicFeed> {
         let (producer, consumer) = HeapRb::<f32>::new(RING_CAPACITY).split();
         let in_use = Arc::new(AtomicBool::new(false));
-        self.send(Cmd::StartMic { consumer, in_use: in_use.clone(), on_usage: Box::new(on_usage) })?;
-        Ok(MicFeed { producer: Arc::new(Mutex::new(producer)), in_use })
+        let counters = Arc::new(MicCounters::default());
+        self.send(Cmd::StartMic { consumer, in_use: in_use.clone(), counters: counters.clone(), on_usage: Box::new(on_usage) })?;
+        Ok(MicFeed { producer: Arc::new(Mutex::new(producer)), in_use, counters })
     }
 
     pub fn stop_mic(&self) -> Result<()> {
@@ -202,9 +253,9 @@ fn run(cmd_rx: pw::channel::Receiver<Cmd>, ready: &mpsc::Sender<Result<()>>) -> 
         let mic = mic.clone();
         let defaults = defaults.clone();
         move |cmd| match cmd {
-            Cmd::StartMic { consumer, in_use, on_usage } => {
+            Cmd::StartMic { consumer, in_use, counters, on_usage } => {
                 mic.borrow_mut().take();
-                match Mic::new(&core, consumer, in_use, on_usage) {
+                match Mic::new(&core, consumer, in_use, counters, on_usage) {
                     Ok(m) => *mic.borrow_mut() = Some(m),
                     Err(e) => log::error!("creating the virtual microphone: {e}"),
                 }
@@ -290,10 +341,10 @@ struct MicState {
     in_use: Arc<AtomicBool>,
     rate_match: *mut spa::sys::spa_io_rate_match,
     dll: Dll,
-    /// Whether the ring holds enough audio to play from; until then, silence.
-    primed: bool,
+    playout: Playout,
     scratch: Vec<f32>,
     cycles: u64,
+    counters: Arc<MicCounters>,
 }
 
 impl Drop for Mic {
@@ -307,6 +358,7 @@ impl Mic {
         core: &pw::core::CoreRc,
         consumer: HeapCons<f32>,
         in_use: Arc<AtomicBool>,
+        counters: Arc<MicCounters>,
         on_usage: Box<dyn Fn(bool) + Send>,
     ) -> Result<Self> {
         let props = pw::properties::properties! {
@@ -324,9 +376,10 @@ impl Mic {
             in_use,
             rate_match: std::ptr::null_mut(),
             dll: Dll::new(dll::BW_MIN, 128, RATE),
-            primed: false,
+            playout: Playout::default(),
             scratch: Vec::new(),
             cycles: 0,
+            counters,
         };
         let listener = stream
             .add_local_listener_with_user_data(state)
@@ -338,7 +391,7 @@ impl Mic {
                 if in_use != state.in_use.load(Ordering::Relaxed) {
                     state.in_use.store(in_use, Ordering::Relaxed);
                     state.consumer.clear();
-                    state.primed = false;
+                    state.playout = Playout::default();
                     state.dll.reset();
                     log::info!("virtual microphone {}", if in_use { "in use" } else { "idle" });
                     (state.on_usage)(in_use);
@@ -397,36 +450,15 @@ fn process(stream: &pw::stream::Stream, state: &mut MicState) {
         state.scratch.clear();
         state.scratch.resize(wanted, 0.0);
 
-        let target = wanted + CHUNK + MARGIN;
-        let mut avail = state.consumer.occupied_len();
-        if !state.primed && avail >= target {
-            state.consumer.skip(avail - target);
-            avail = target;
-            state.primed = true;
-        }
-        if state.primed {
-            if avail > target * MAX_FILL_FACTOR {
-                log::debug!("virtual mic: {avail} frames queued, dropping to {target}");
-                state.consumer.skip(avail - target);
-                avail = target;
+        if let Some(error) = state.playout.fill(&mut state.consumer, &mut state.scratch, &state.counters) {
+            let corr = state.dll.update(error.clamp(-MAX_ERROR, MAX_ERROR));
+            state.cycles += 1;
+            if state.cycles % 256 == 0 {
+                log::debug!("virtual mic: fill error {error}, quantum {wanted}, correction {corr:.6}");
             }
-            if avail < wanted {
-                // Underrun: play what's left, then silence until refilled.
-                log::debug!("virtual mic underrun: {avail} < {wanted}");
-                state.consumer.pop_slice(&mut state.scratch[..avail]);
-                state.primed = false;
-            } else {
-                let error = (target as f64 - avail as f64).clamp(-MAX_ERROR, MAX_ERROR);
-                let corr = state.dll.update(error);
-                state.cycles += 1;
-                if state.cycles % 256 == 0 {
-                    log::debug!("virtual mic: queued {avail}, target {target}, quantum {wanted}, correction {corr:.6}");
-                }
-                if let Some(rm) = unsafe { state.rate_match.as_mut() } {
-                    rm.flags |= spa::sys::SPA_IO_RATE_MATCH_FLAG_ACTIVE;
-                    rm.rate = 1.0 / corr;
-                }
-                state.consumer.pop_slice(&mut state.scratch);
+            if let Some(rm) = unsafe { state.rate_match.as_mut() } {
+                rm.flags |= spa::sys::SPA_IO_RATE_MATCH_FLAG_ACTIVE;
+                rm.rate = 1.0 / corr;
             }
         }
         for (dst, s) in slice.chunks_exact_mut(stride).zip(&state.scratch) {

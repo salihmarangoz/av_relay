@@ -155,6 +155,22 @@ fn find_device(label: &str) -> Result<Option<u32>> {
     Ok(None)
 }
 
+/// How frames reached the camera since the last `take_stats()`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CamStats {
+    /// Frames from the Mac.
+    pub pushed: u64,
+    /// Of those, frames that came more than 1.5 frame intervals after the
+    /// one before.
+    pub late: u64,
+    /// The longest time between two frames from the Mac.
+    pub max_gap: Duration,
+    /// The newest frame written again because the next one was overdue.
+    pub repeated: u64,
+    /// Placeholder frames written (no frame from the Mac yet).
+    pub placeholder: u64,
+}
+
 struct State {
     in_use: bool,
     /// The newest frame from the Mac; empty until one arrives.
@@ -164,6 +180,9 @@ struct State {
     /// When the newest frame arrived.
     last_push: Instant,
     last_write: Instant,
+    stats: CamStats,
+    /// When the previous frame from the Mac arrived, for the gaps.
+    prev_push: Option<Instant>,
 }
 
 struct Shared {
@@ -255,6 +274,8 @@ impl VirtualCamera {
                 placeholder,
                 last_push: Instant::now(),
                 last_write: Instant::now(),
+                stats: CamStats::default(),
+                prev_push: None,
             }),
             wake: Condvar::new(),
             stop: AtomicBool::new(false),
@@ -297,7 +318,16 @@ impl VirtualCamera {
         let mut state = self.shared.state.lock().unwrap();
         state.frame.clear();
         state.frame.extend_from_slice(frame);
-        state.last_push = Instant::now();
+        let now = Instant::now();
+        state.last_push = now;
+        if let Some(prev) = state.prev_push.replace(now) {
+            let gap = now - prev;
+            state.stats.max_gap = state.stats.max_gap.max(gap);
+            if gap > self.shared.format.frame_interval() * 3 / 2 {
+                state.stats.late += 1;
+            }
+        }
+        state.stats.pushed += 1;
         if state.in_use {
             self.shared.write(frame, &mut state);
         }
@@ -305,7 +335,14 @@ impl VirtualCamera {
 
     /// Goes back to the placeholder, e.g. when the Mac stops its camera.
     pub fn clear(&self) {
-        self.shared.state.lock().unwrap().frame.clear();
+        let mut state = self.shared.state.lock().unwrap();
+        state.frame.clear();
+        state.prev_push = None;
+    }
+
+    /// The counts since the last call, which resets them.
+    pub fn take_stats(&self) -> CamStats {
+        std::mem::take(&mut self.shared.state.lock().unwrap().stats)
     }
 
     /// What to show while there's no frame from the Mac: `None` is black
@@ -423,8 +460,10 @@ fn keep_frames(shared: &Shared) {
                 let placeholder = std::mem::take(&mut state.placeholder);
                 shared.write(&placeholder, &mut state);
                 state.placeholder = placeholder;
+                state.stats.placeholder += 1;
             } else {
                 shared.write(&frame, &mut state);
+                state.stats.repeated += 1;
             }
             state.frame = frame;
             continue;
