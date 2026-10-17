@@ -10,6 +10,12 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Sender: when the camera starts again while the microphone stays on, video
+  comes back at full quality at once, instead of 320x180 at 10–15 fps for
+  about 20 seconds.
+
 ## [0.3.0] - 2026-10-17
 
 ### Added

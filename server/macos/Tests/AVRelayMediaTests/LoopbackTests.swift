@@ -103,6 +103,41 @@ enum Hardware {
             #expect(client.frames.size == CGSize(width: 640, height: 480))
         }
     }
+
+    /// Video turned on after an audio-only stretch starts at full quality. With
+    /// only audio flowing, the bandwidth estimate sinks to its 300 kbit/s floor;
+    /// video resumed from there started at 320x180 and 10 fps and took ~25 s to
+    /// climb back, though the estimate itself recovered within seconds.
+    @Test func videoAfterAudioOnlyStartsAtFullQuality() async throws {
+        var settings = MediaEngine.Settings()
+        settings.camera = .testPattern
+        settings.microphone = .testTone
+        settings.linger = 0.3
+        let engine = MediaEngine(settings: settings)
+        let client = LoopbackClient(engine: engine)
+        defer {
+            engine.end(channel: client)
+            client.peer.close()
+        }
+        engine.start(channel: client, hello: Hello(name: "test", app: "test", video: VideoFormat(width: 1280, height: 720, fps: 30)))
+        #expect(await waitUntil { client.connected })
+        engine.receive(.media(video: true, audio: true), from: client)
+        #expect(await waitUntil { client.frames.count > 10 })
+        engine.receive(.media(video: false, audio: true), from: client)
+        #expect(await waitUntil { client.lastState()?.video == .off })
+        let sank = await waitUntil(15) { await engine.availableOutgoingBitrate().map { $0 <= 400_000 } == true }
+        let estimate = await engine.availableOutgoingBitrate() ?? -1
+        #expect(sank, "the estimate no longer sinks while only audio flows: \(estimate)")
+
+        let stopped = client.frames.count
+        engine.receive(.media(video: true, audio: true), from: client)
+        #expect(await waitUntil { client.frames.count > stopped + 30 })
+        if !Hardware.isVirtualMachine {
+            let video = await engine.videoOutbound()
+            #expect(client.frames.size == CGSize(width: 1280, height: 720), "size \(client.frames.size)")
+            #expect(video?["qualityLimitationReason"] as? String == "none")
+        }
+    }
 }
 
 @Suite(.serialized) struct NegotiationTests {

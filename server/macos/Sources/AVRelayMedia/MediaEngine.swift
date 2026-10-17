@@ -164,6 +164,19 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
         return await withCheckedContinuation { continuation in peer.statistics { continuation.resume(returning: $0) } }
     }
 
+    /// The video sender's outbound-rtp stats (tests).
+    func videoOutbound() async -> [String: NSObject]? {
+        await statistics()?.statistics.values.first { $0.type == "outbound-rtp" && $0.values["kind"] as? String == "video" }?.values
+    }
+
+    /// The bandwidth estimate on the call's path, in bit/s (tests).
+    func availableOutgoingBitrate() async -> Int? {
+        let pair = await statistics()?.statistics.values.first {
+            $0.type == "candidate-pair" && ($0.values["nominated"] as? NSNumber)?.boolValue == true
+        }
+        return (pair?.values["availableOutgoingBitrate"] as? NSNumber)?.intValue
+    }
+
     /// Switches the camera; a running capture moves over at once.
     public func setCamera(_ source: CameraSource) {
         queue.async { [self] in
@@ -305,10 +318,7 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
                 return
             }
             self.peer = peer
-            // A LAN carries far more than libwebrtc's cautious ~300 kbit/s start, which would also make
-            // it start 1080p at a reduced resolution. GCC still backs off if the Wi-Fi can't keep up.
-            let cap = MediaEngine.maxVideoBitrate(format)
-            peer.setBweMinBitrateBps(NSNumber(value: 300_000), currentBitrateBps: NSNumber(value: cap / 2), maxBitrateBps: nil)
+            seedBandwidthEstimate()
 
             let videoInit = RTCRtpTransceiverInit()
             videoInit.direction = .sendOnly
@@ -355,6 +365,16 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
             makeOffer(iceRestart: false)
             reportState()
             startDiagnostics()
+        }
+
+        /// Starts the bandwidth estimate at half the format's cap: at the call's start, and
+        /// whenever video starts again. A LAN carries far more than libwebrtc's cautious ~300 kbit/s
+        /// start, which would also make it start 1080p at a reduced resolution; and while only
+        /// audio flows, the estimate sinks to that floor, so video resumed there starts at 320x180
+        /// and 10 fps and takes ~25 s to climb back. GCC still backs off if the Wi-Fi can't keep up.
+        private func seedBandwidthEstimate() {
+            let cap = MediaEngine.maxVideoBitrate(format)
+            peer?.setBweMinBitrateBps(NSNumber(value: 300_000), currentBitrateBps: NSNumber(value: cap / 2), maxBitrateBps: nil)
         }
 
         /// Every 5 s while the camera or microphone runs: one log line with the
@@ -519,6 +539,7 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
                 guard granted else { return self.deviceFailed(kind, .permissionDenied) }
                 switch kind {
                 case .video:
+                    self.seedBandwidthEstimate()
                     self.engine.camera.start(format: self.format)
                     self.setActive(self.videoSender, true)
                 case .audio:
