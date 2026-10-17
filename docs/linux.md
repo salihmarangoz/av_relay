@@ -48,12 +48,18 @@ OBS's virtual camera, may then need its own device:
 
 ## While the Mac is connected
 
-- **MacBook Camera** appears in apps. It disappears again when the Mac goes
-  away, so apps fall back to the built-in camera.
-- **MacBook Microphone** becomes the default input. When the Mac goes away,
-  your previous default comes back (also after a crash or power cut: the next
-  start puts it back). If you pick another input meanwhile, AV Relay leaves
-  your choice alone.
+- **MacBook Camera** appears in apps, and **MacBook Microphone** becomes the
+  default input.
+- When the Mac goes away (sleep, Wi-Fi drop), both stay for **5 minutes**:
+  the camera shows a "Waiting for <your Mac>…" picture and the microphone is
+  silent, so a call doesn't lose its devices over a short drop. When the Mac
+  comes back, the picture and sound come back by themselves.
+- After 5 minutes they go away, apps fall back to the built-in camera, and
+  your previous default input comes back (also after a crash or power cut:
+  the next start puts it back). If you pick another input meanwhile, AV
+  Relay leaves your choice alone.
+- **Keep virtual devices on** (top bar menu or the AV Relay window) keeps
+  both for good, so the default input never switches.
 - The Mac's camera and microphone run only while an app here uses them, and
   stop about 3 seconds after the last one lets go.
 

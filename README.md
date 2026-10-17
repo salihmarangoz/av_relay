@@ -96,9 +96,15 @@ In your app's settings, choose **MacBook Camera** and **MacBook Microphone**.
 The microphone is already the default input while the Mac is connected; most
 apps remember the camera you chose.
 
+If the Mac drops off (sleep, Wi-Fi), the camera and microphone stay for 5
+minutes, the camera showing a "Waiting for your Mac" picture, so a short drop
+doesn't break your call. Turn on **Keep virtual devices on** to keep them for
+good.
+
 The top bar menu shows whether the Mac is connected and whether the camera and
 microphone are in use. From it you can also pick the camera quality (1080p or
-720p), turn **Start at login** off, pair another Mac, or forget this one.
+720p), keep the virtual devices on, turn **Start at login** off, pair another
+Mac, or forget this one.
 
 ## Troubleshooting
 
