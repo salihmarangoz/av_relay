@@ -1,14 +1,27 @@
-# Build and test the Mac app and the shared vectors when they change. macOS
-# runner minutes count 10x on a private repo, hence the paths filter; the
-# Linux client has its own workflow (linux.yml).
+# The Mac app and the shared test vectors: built and tested on main and on
+# pull requests when they change, and on demand for a task branch
+# (gh workflow run ci.yml --ref task/T14). The repository is private until
+# its first release, so Actions minutes count, macOS ones ten times: no runs
+# for every push to a task branch. The Linux client has linux.yml.
 name: CI
 
 on:
   push:
-    branches: [main, "task/**"]
-    paths: ["server/**", "tests/**", "docs/protocol.md", "assets/generated/**", ".github/workflows/ci.yml"]
+    branches: [main]
+    paths:
+      - "server/**"
+      - "docs/protocol.md"
+      - "tests/**"
+      - "assets/generated/**"
+      - ".github/workflows/ci.yml"
   pull_request:
-    paths: ["server/**", "tests/**", "docs/protocol.md", "assets/generated/**", ".github/workflows/ci.yml"]
+    paths:
+      - "server/**"
+      - "docs/protocol.md"
+      - "tests/**"
+      - "assets/generated/**"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
