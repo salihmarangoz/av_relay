@@ -11,14 +11,15 @@ mod vcam;
 use anyhow::{Result, bail};
 
 const USAGE: &str =
-    "usage: av-relay [run | vcam-test | vmic-test [SECONDS] [--default] [--drift PPM] | media-test [SECONDS] | answer-test OFFER.sdp | pair HOST[:PORT] [CODE] | session-test [SECONDS]]\n(no command: the tray app)";
+    "usage: av-relay [run | vcam-test | vmic-test [SECONDS] [--default] [--drift PPM] | media-test [SECONDS] | answer-test OFFER.sdp | pair HOST[:PORT] [CODE] | session-test [SECONDS]]\n(no command: the tray app; --autostart: the tray app, started at login)";
 
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest = args.get(1..).unwrap_or_default();
     match args.first().map(String::as_str) {
-        None => ui::run(),
+        None => ui::run(false),
+        Some("--autostart") => ui::run(true),
         Some("run") => run_headless(),
         Some("vcam-test") => devtools::vcam_test(),
         Some("vmic-test") => devtools::vmic_test(rest),

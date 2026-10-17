@@ -13,6 +13,7 @@ pub struct Tray {
     pub status: Status,
     pub problems: Vec<String>,
     pub autostart: bool,
+    pub start_minimized: bool,
     pub keep_devices: bool,
     pub enabled: bool,
     pub video: VideoFormat,
@@ -200,6 +201,19 @@ impl ksni::Tray for Tray {
                 activate: Box::new(|t: &mut Self| {
                     t.autostart = !t.autostart;
                     t.send(UiEvent::SetAutostart(t.autostart));
+                }),
+                ..Default::default()
+            }
+            .into(),
+        );
+        items.push(
+            CheckmarkItem {
+                label: "Start minimized".into(),
+                checked: self.start_minimized,
+                enabled: self.autostart,
+                activate: Box::new(|t: &mut Self| {
+                    t.start_minimized = !t.start_minimized;
+                    t.send(UiEvent::SetStartMinimized(t.start_minimized));
                 }),
                 ..Default::default()
             }

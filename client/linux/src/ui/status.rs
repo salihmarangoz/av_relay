@@ -1,6 +1,6 @@
 //! The status window: everything the tray menu offers, in a window. It opens
-//! when AV Relay is launched while it already runs, and when there is no
-//! tray to show (the desktop's tray support is off).
+//! when AV Relay is launched (at login too, unless it starts minimized), and
+//! when there is no tray to show (the desktop's tray support is off).
 
 use std::rc::Rc;
 
@@ -104,9 +104,22 @@ fn build(ui: &Rc<Ui>) -> adw::Window {
             let _ = events.try_send(UiEvent::SetAutostart(row.is_active()));
         }
     });
+    let minimized = adw::SwitchRow::builder()
+        .title("Start minimized")
+        .subtitle("At login, only the icon in the top bar; no window")
+        .active(ui.core.store().settings().unwrap_or_default().start_minimized)
+        .build();
+    login.bind_property("active", &minimized, "sensitive").sync_create().build();
+    minimized.connect_active_notify({
+        let events = ui.events.clone();
+        move |row| {
+            let _ = events.try_send(UiEvent::SetStartMinimized(row.is_active()));
+        }
+    });
     settings.add(&quality);
     settings.add(&keep);
     settings.add(&login);
+    settings.add(&minimized);
     page.add(&settings);
 
     let actions = adw::PreferencesGroup::new();

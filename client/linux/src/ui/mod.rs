@@ -32,6 +32,7 @@ pub enum UiEvent {
     ConfirmForget,
     SetVideo(VideoFormat),
     SetAutostart(bool),
+    SetStartMinimized(bool),
     SetKeepDevices(bool),
     SetEnabled(bool),
     /// The desktop's tray host appeared or went away.
@@ -48,6 +49,8 @@ pub struct Ui {
     status: watch::Receiver<Status>,
     events: async_channel::Sender<UiEvent>,
     tray_available: std::cell::Cell<bool>,
+    /// Opens the status window if the tray host stays away.
+    tray_watch: RefCell<Option<glib::JoinHandle<()>>>,
     /// "Enable AV Relay" as last chosen (in the tray or a window); the
     /// status can lag behind it while a session winds down.
     enabled: std::cell::Cell<bool>,
@@ -55,7 +58,8 @@ pub struct Ui {
     status_window: RefCell<Option<glib::WeakRef<adw::Window>>>,
 }
 
-pub fn run() -> Result<()> {
+/// `at_login`: started by the autostart entry.
+pub fn run(at_login: bool) -> Result<()> {
     let app = adw::Application::builder().application_id(APP_ID).build();
     // One instance: a second start just asks the running one to show itself.
     app.register(None::<&gio::Cancellable>).context("registering the application")?;
@@ -86,6 +90,7 @@ pub fn run() -> Result<()> {
         status: Status::Starting,
         problems: core.problems().to_vec(),
         autostart: autostart::is_enabled(),
+        start_minimized: settings.start_minimized,
         keep_devices: settings.keep_devices,
         enabled: settings.enabled,
         video: settings.video,
@@ -116,6 +121,7 @@ pub fn run() -> Result<()> {
         status: status_rx,
         events: ui_tx.clone(),
         tray_available: std::cell::Cell::new(true),
+        tray_watch: RefCell::default(),
         enabled: std::cell::Cell::new(settings.enabled),
         pair_window: RefCell::default(),
         status_window: RefCell::default(),
@@ -130,15 +136,22 @@ pub fn run() -> Result<()> {
     }
     gtk::Window::set_default_icon_name(APP_ID);
 
+    // Started at login with "Start minimized": the launch's own activation
+    // shows nothing once paired (the tray icon is there); later ones do.
+    let quiet = std::cell::Cell::new(at_login && settings.start_minimized);
     app.connect_activate({
         let ui = ui.clone();
         move |_| {
+            let paired = ui.core.store().paired_sender().ok().flatten().is_some();
+            if quiet.replace(false) && paired {
+                return;
+            }
             // Launched from the app grid (or again while running): show
             // something. Not paired: the pairing window; else the status.
-            if ui.core.store().paired_sender().ok().flatten().is_none() {
-                pair::show(&ui);
-            } else {
+            if paired {
                 status::show(&ui);
+            } else {
+                pair::show(&ui);
             }
         }
     });
@@ -171,9 +184,12 @@ pub fn run() -> Result<()> {
                     }
                     UiEvent::TrayAvailable(available) => {
                         let was = ui.tray_available.replace(available);
-                        if was && !available {
-                            log::warn!("no tray host (on GNOME: the Ubuntu AppIndicators extension); showing the status window");
-                            status::show(&ui);
+                        if available {
+                            if let Some(watch) = ui.tray_watch.take() {
+                                watch.abort();
+                            }
+                        } else if was {
+                            *ui.tray_watch.borrow_mut() = Some(glib::spawn_future_local(tray_host_gone(ui.clone())));
                         }
                     }
                     UiEvent::SetKeepDevices(on) => {
@@ -218,6 +234,20 @@ pub fn run() -> Result<()> {
                             async move { tray.update(|t| t.autostart = actual).await }
                         });
                     }
+                    UiEvent::SetStartMinimized(on) => {
+                        let store = ui.core.store();
+                        let mut s = store.settings().unwrap_or_default();
+                        if s.start_minimized != on {
+                            s.start_minimized = on;
+                            if let Err(e) = store.save_settings(&s) {
+                                log::error!("saving settings: {e:#}");
+                            }
+                        }
+                        ui.rt.spawn({
+                            let tray = tray.clone();
+                            async move { tray.update(|t| t.start_minimized = on).await }
+                        });
+                    }
                     UiEvent::Quit => {
                         ui.app.quit();
                         break;
@@ -250,6 +280,45 @@ pub fn run() -> Result<()> {
         tray.shutdown().await;
     });
     Ok(())
+}
+
+/// The tray host went away. The status window stands in for it, but only
+/// once the host has been gone for a while with the screen unlocked: at
+/// login the host can come up after us, and GNOME switches its tray
+/// extension off while the screen is locked.
+async fn tray_host_gone(ui: Rc<Ui>) {
+    const GRACE: Duration = Duration::from_secs(10);
+    const STEP: Duration = Duration::from_secs(1);
+    let mut gone = Duration::ZERO;
+    let mut locked = false;
+    while gone < GRACE {
+        // Locked, it can be all night: ask less often.
+        glib::timeout_future(if locked { 5 * STEP } else { STEP }).await;
+        locked = screen_locked().await;
+        gone = if locked { Duration::ZERO } else { gone + STEP };
+    }
+    log::warn!("no tray host (on GNOME: the Ubuntu AppIndicators extension); showing the status window");
+    ui.tray_watch.take();
+    status::show(&ui);
+}
+
+/// Whether this session's screen is locked: logind's LockedHint, which
+/// GNOME and KDE set. Unknown counts as unlocked.
+async fn screen_locked() -> bool {
+    let Ok(bus) = gio::bus_get_future(gio::BusType::System).await else { return false };
+    let reply = bus
+        .call_future(
+            Some("org.freedesktop.login1"),
+            "/org/freedesktop/login1/session/auto",
+            "org.freedesktop.DBus.Properties",
+            "Get",
+            Some(&("org.freedesktop.login1.Session", "LockedHint").to_variant()),
+            Some(glib::VariantTy::new("(v)").expect("valid type")),
+            gio::DBusCallFlags::NONE,
+            1000,
+        )
+        .await;
+    reply.ok().and_then(|r| r.child_value(0).as_variant()).and_then(|v| v.get::<bool>()).unwrap_or(false)
 }
 
 fn confirm_forget(ui: &Rc<Ui>) {

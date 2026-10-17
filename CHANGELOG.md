@@ -10,6 +10,19 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Receiver: **Start minimized**, on by default. At login a paired AV Relay
+  shows only its icon in the top bar and opens no window; opening it from
+  the app grid still shows the window.
+
+### Fixed
+
+- Receiver: locking the screen no longer opens the AV Relay window. GNOME
+  hides tray icons on the lock screen, and AV Relay took that for a desktop
+  without a tray. Its window now stands in for a missing tray icon only when
+  the icon has been gone for 10 seconds with the screen unlocked.
+
 ## [0.1.0] - 2026-10-17
 
 The first release.

@@ -106,7 +106,8 @@ Each side's menu shows whether they're connected and whether the camera and
 microphone are in use. **Enable AV Relay** at the top switches a side off
 without quitting it, as if it were closed, and back on. On the receiver you
 can also pick the camera quality (1080p or 720p), turn **Start at login**
-off, pair with a different sender, or forget this one.
+or **Start minimized** off, pair with a different sender, or forget this
+one.
 
 ## How it works
 
