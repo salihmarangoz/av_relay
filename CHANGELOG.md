@@ -10,6 +10,8 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-17
+
 The first release.
 
 ### Added
@@ -41,4 +43,5 @@ The first release.
   No account, no cloud.
 - Protocol version 1 (`av-relay/1`, docs/protocol.md).
 
-[Unreleased]: https://github.com/salihmarangoz/av_relay/commits/main
+[Unreleased]: https://github.com/salihmarangoz/av_relay/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/salihmarangoz/av_relay/releases/tag/v0.1.0
