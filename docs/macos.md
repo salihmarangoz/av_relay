@@ -32,9 +32,14 @@ AV Relay lives in the menu bar; it has no Dock icon. The icon shows its state:
 | lens only | no computer connected |
 | lens and arcs | a paired computer is connected |
 | filled lens | the camera or microphone is in use |
+| lens struck through | AV Relay is switched off |
 
 The menu:
 
+- **Enable AV Relay:** on by default. Off is as if AV Relay were closed:
+  receivers can't connect or find this Mac, a connected one is let go, and
+  the camera and microphone are closed; only the menu bar icon stays, to
+  switch it back on. AV Relay remembers the choice, also after a restart.
 - **Status:** which computer is connected, and whether the camera and
   microphone are off, starting, on, or not allowed.
 - **Allow Pairing…** opens the pairing window (see below).
@@ -87,8 +92,8 @@ connected, AV Relay doesn't touch them at all.
 ## Troubleshooting
 
 **The receiver can't find or reach the Mac.** Check that AV Relay runs (its icon is
-in the menu bar), that both computers are on the same network, and the
-firewall (above). In the pairing window, use the address on the same network
+in the menu bar) and is enabled (the icon isn't struck through), that both
+computers are on the same network, and the firewall (above). In the pairing window, use the address on the same network
 as the receiver.
 
 **The camera or microphone says "not allowed".** Open **System Settings →

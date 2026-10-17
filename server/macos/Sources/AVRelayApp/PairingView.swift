@@ -21,7 +21,11 @@ struct PairingView: View {
                 Button("New Code") { model.openPairing() }
                     .keyboardShortcut(.defaultAction)
             case nil:
-                if let code = model.pairingCode, let expires = model.pairingExpires {
+                if !model.enabled {
+                    Text("AV Relay is off. To pair, choose Enable AV Relay in its menu.")
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.secondary)
+                } else if let code = model.pairingCode, let expires = model.pairingExpires {
                     codeView(code, expires: expires)
                 } else {
                     Text("No pairing code is active.")

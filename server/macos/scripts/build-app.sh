@@ -60,7 +60,7 @@ sed -e "s/@VERSION@/$version/g" -e "s/@BUILD@/$build/g" App/Info.plist >"$app/Co
 # The logo (assets/logo/generate.py): the app icon and the menu bar's template images.
 icons=../../assets/generated
 cp "$icons/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
-cp "$icons"/macos-menubar/menubar-{off,on,live}{,@2x}.png "$app/Contents/Resources/"
+cp "$icons"/macos-menubar/menubar-{off,on,live,disabled}{,@2x}.png "$app/Contents/Resources/"
 
 # Load frameworks from the bundle, and keep no paths of the build machine:
 # release builds still carry a debug map (OSO entries naming each object

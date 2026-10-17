@@ -91,7 +91,7 @@ A menu bar app (no Dock icon) in Swift. Deployment target macOS 14.
 | Camera | `AVCaptureSession` into libwebrtc's video source: the smallest camera mode that covers the requested format, scaled to it exactly |
 | Microphone | AV Relay's own libwebrtc audio device: captures the chosen microphone (the built-in one unless the user picks another) and nothing is played out; echo cancellation, gain control and noise suppression off |
 | Sleep | IOKit power notifications: before sleep the session ends (bye `sleep`), sessions are refused until the wake, and the sleep is acknowledged only once the camera and microphone are closed |
-| Menu | status (connected receiver, camera/mic in use), *Allow Pairing…*, paired devices (remove), camera/mic choice, Open at Login, Settings (port), quit |
+| Menu | *Enable AV Relay* (off: as if quit, remembered), status (connected receiver, camera/mic in use), *Allow Pairing…*, paired devices (remove), camera/mic choice, Open at Login, Settings (port), quit |
 
 **On demand without renegotiation.** A kind turns on by resuming its
 sender's encoding and off (3 seconds after the receiver stops using it) by
