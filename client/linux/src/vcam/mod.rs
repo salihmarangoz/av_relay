@@ -58,11 +58,13 @@ impl CameraFormat {
 pub fn check_loopback() -> Result<(u32, u32, u32)> {
     let ctl = match File::open(CONTROL_DEVICE) {
         Ok(f) => f,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            bail!("the v4l2loopback kernel module isn't loaded ({CONTROL_DEVICE} is missing)")
-        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => bail!(
+            "the v4l2loopback kernel module isn't loaded. On Ubuntu 24.04 with the HWE kernel, install it with \
+             `sudo apt install linux-modules-v4l2loopback-generic-hwe-24.04` and restart the computer."
+        ),
         Err(e) if e.kind() == io::ErrorKind::PermissionDenied => bail!(
-            "no access to {CONTROL_DEVICE}: the udev rule that gives the desktop user access is missing"
+            "no access to {CONTROL_DEVICE}. Reinstalling AV Relay restores the rule that grants it; \
+             `sudo udevadm trigger --action=change --sysname-match=v4l2loopback` applies it now."
         ),
         Err(e) => return Err(e).context(CONTROL_DEVICE),
     };
@@ -73,7 +75,9 @@ pub fn check_loopback() -> Result<(u32, u32, u32)> {
     if version < sys::MIN_LOOPBACK_VERSION {
         let (a, b, c) = sys::MIN_LOOPBACK_VERSION;
         bail!(
-            "v4l2loopback {}.{}.{} can't tell when an app uses the camera; {a}.{b}.{c} or newer is needed",
+            "v4l2loopback {}.{}.{} can't tell when an app uses the camera; {a}.{b}.{c} or newer is needed. \
+             Ubuntu 24.04's v4l2loopback-dkms is too old: use the HWE kernel's module instead \
+             (`sudo apt install linux-modules-v4l2loopback-generic-hwe-24.04`, then restart).",
             version.0,
             version.1,
             version.2

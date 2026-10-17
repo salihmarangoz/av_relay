@@ -1,0 +1,3 @@
+# AV Relay creates its "MacBook Camera" through v4l2loopback's control
+# device; give the user at the seat access to it, as for cameras.
+KERNEL=="v4l2loopback", SUBSYSTEM=="misc", TAG+="uaccess"

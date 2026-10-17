@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.salihmarangoz.avrelay</id>
+  <name>AV Relay</name>
+  <summary>Use your MacBook's camera and microphone on this computer</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <description>
+    <p>
+      AV Relay makes a MacBook's camera and microphone show up on Ubuntu as a
+      regular webcam ("MacBook Camera") and microphone ("MacBook Microphone")
+      for any app, over the local network. The Mac's camera and microphone
+      run only while an app here uses them.
+    </p>
+    <p>Pair once with a 6-digit code shown on the Mac; the connection is encrypted end to end.</p>
+  </description>
+  <launchable type="desktop-id">io.github.salihmarangoz.avrelay.desktop</launchable>
+  <url type="homepage">https://github.com/salihmarangoz/av_relay_mac_to_linux</url>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-10-17"/>
+  </releases>
+</component>

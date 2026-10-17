@@ -42,3 +42,41 @@ lto = "thin"
 
 [dev-dependencies]
 hex = "0.4.3"
+
+# The .deb (cargo deb). Plugins and services are loaded at run time, so
+# they're listed by hand next to the linked libraries ($auto).
+[package.metadata.deb]
+name = "av-relay"
+maintainer = "Salih Marangoz <salih285@gmail.com>"
+copyright = "AV Relay contributors"
+license-file = ["../../LICENSE", "0"]
+section = "video"
+priority = "optional"
+extended-description = """\
+AV Relay makes a MacBook's camera and microphone show up on Ubuntu as a \
+regular webcam ("MacBook Camera") and microphone ("MacBook Microphone") for \
+any app, over the local network. The Mac's camera and microphone run only \
+while an app here uses them. The Mac side is the AV Relay app for macOS."""
+depends = "$auto, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-libav, gstreamer1.0-nice, pipewire, wireplumber, kmod"
+recommends = "gnome-shell-extension-appindicator"
+suggests = "linux-modules-v4l2loopback-generic-hwe-24.04, v4l2loopback-utils"
+maintainer-scripts = "packaging/debian"
+assets = [
+    ["target/release/av-relay", "usr/bin/", "755"],
+    ["packaging/io.github.salihmarangoz.avrelay.desktop", "usr/share/applications/", "644"],
+    ["packaging/io.github.salihmarangoz.avrelay.metainfo.xml", "usr/share/metainfo/", "644"],
+    ["packaging/70-av-relay.rules", "usr/lib/udev/rules.d/", "644"],
+    ["packaging/modules-load.conf", "etc/modules-load.d/av-relay.conf", "644"],
+    ["packaging/modprobe.conf", "etc/modprobe.d/av-relay.conf", "644"],
+    ["../../assets/generated/linux/hicolor/scalable/apps/*", "usr/share/icons/hicolor/scalable/apps/", "644"],
+    ["../../assets/generated/linux/hicolor/symbolic/apps/*", "usr/share/icons/hicolor/symbolic/apps/", "644"],
+    ["../../assets/generated/linux/hicolor/16x16/apps/*", "usr/share/icons/hicolor/16x16/apps/", "644"],
+    ["../../assets/generated/linux/hicolor/32x32/apps/*", "usr/share/icons/hicolor/32x32/apps/", "644"],
+    ["../../assets/generated/linux/hicolor/48x48/apps/*", "usr/share/icons/hicolor/48x48/apps/", "644"],
+    ["../../assets/generated/linux/hicolor/64x64/apps/*", "usr/share/icons/hicolor/64x64/apps/", "644"],
+    ["../../assets/generated/linux/hicolor/128x128/apps/*", "usr/share/icons/hicolor/128x128/apps/", "644"],
+    ["../../assets/generated/linux/hicolor/256x256/apps/*", "usr/share/icons/hicolor/256x256/apps/", "644"],
+    ["../../assets/generated/linux/hicolor/512x512/apps/*", "usr/share/icons/hicolor/512x512/apps/", "644"],
+    ["../../assets/generated/linux/hicolor/22x22/status/*", "usr/share/icons/hicolor/22x22/status/", "644"],
+    ["../../assets/generated/linux/hicolor/44x44/status/*", "usr/share/icons/hicolor/44x44/status/", "644"],
+]

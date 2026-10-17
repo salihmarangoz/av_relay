@@ -1,0 +1,16 @@
+#!/bin/sh
+set -e
+if [ "$1" = "configure" ]; then
+    udevadm control --reload-rules 2>/dev/null || true
+    if [ ! -e /dev/v4l2loopback ]; then
+        modprobe v4l2loopback devices=0 2>/dev/null || cat <<'MSG'
+AV Relay: the v4l2loopback kernel module couldn't be loaded, so the camera
+won't work yet (the microphone will). On Ubuntu 24.04 with the HWE kernel:
+    sudo apt install linux-modules-v4l2loopback-generic-hwe-24.04
+then restart. Details: /usr/share/doc/av-relay/README.md
+MSG
+    fi
+    # Apply the uaccess rule to a control device that already existed.
+    udevadm trigger --action=change --subsystem-match=misc --sysname-match=v4l2loopback 2>/dev/null || true
+fi
+exit 0

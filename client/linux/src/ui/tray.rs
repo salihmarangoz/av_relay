@@ -103,8 +103,16 @@ impl ksni::Tray for Tray {
             items.push(info(device_line("Camera", camera)));
             items.push(info(device_line("Microphone", mic)));
         }
-        for p in &self.problems {
-            items.push(info(shorten(p, 70)));
+        if !self.problems.is_empty() {
+            items.push(
+                StandardItem {
+                    label: "Camera unavailable: details…".into(),
+                    icon_name: "dialog-warning-symbolic".into(),
+                    activate: Box::new(|t: &mut Self| t.send(UiEvent::OpenStatus)),
+                    ..Default::default()
+                }
+                .into(),
+            );
         }
         items.push(MenuItem::Separator);
 

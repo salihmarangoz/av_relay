@@ -47,6 +47,17 @@ fn build(ui: &Rc<Ui>) -> adw::Window {
     mac_group.add(&mic_row);
     page.add(&mac_group);
 
+    if !ui.core.problems().is_empty() {
+        let problems = adw::PreferencesGroup::builder().title("Needs attention").build();
+        for p in ui.core.problems() {
+            let row = adw::ActionRow::builder().title(glib::markup_escape_text(p)).title_lines(0).build();
+            row.add_prefix(&gtk::Image::from_icon_name("dialog-warning-symbolic"));
+            row.set_title_selectable(true);
+            problems.add(&row);
+        }
+        page.add(&problems);
+    }
+
     let settings = adw::PreferencesGroup::builder().title("Settings").build();
     let quality = adw::ComboRow::builder()
         .title("Camera quality")

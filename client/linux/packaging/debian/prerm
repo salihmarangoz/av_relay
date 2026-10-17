@@ -1,0 +1,8 @@
+#!/bin/sh
+set -e
+# On removal, quit running instances politely: each gives the user's
+# default input back before it exits.
+if [ "$1" = "remove" ]; then
+    pkill -TERM -x av-relay 2>/dev/null || true
+fi
+exit 0

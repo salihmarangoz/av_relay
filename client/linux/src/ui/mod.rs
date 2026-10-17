@@ -28,6 +28,7 @@ pub const APP_ID: &str = "io.github.salihmarangoz.avrelay";
 #[derive(Debug)]
 pub enum UiEvent {
     OpenPair,
+    OpenStatus,
     ConfirmForget,
     SetVideo(VideoFormat),
     SetAutostart(bool),
@@ -141,6 +142,7 @@ pub fn run() -> Result<()> {
             while let Ok(event) = ui_rx.recv().await {
                 match event {
                     UiEvent::OpenPair => pair::show(&ui),
+                    UiEvent::OpenStatus => status::show(&ui),
                     UiEvent::ConfirmForget => confirm_forget(&ui),
                     UiEvent::SetVideo(video) => {
                         let store = ui.core.store();
