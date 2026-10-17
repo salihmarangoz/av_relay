@@ -95,7 +95,7 @@ public enum CPace {
     // MARK: One party
 
     /// One side of a CPace run. The initiator (A) is the client; the
-    /// responder (B) is the Mac. A scalar is used for one run only.
+    /// responder (B) is the sender. A scalar is used for one run only.
     public struct Party: Sendable {
         public let isInitiator: Bool
         private let scalar: Data

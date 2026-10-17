@@ -25,7 +25,7 @@ final class FrameCounter: NSObject, RTCVideoRenderer, @unchecked Sendable {
     }
 }
 
-/// The client's side: a libwebrtc answerer, as the Linux app would be.
+/// The receiver's side: a libwebrtc answerer, as a receiver app would be.
 final class LoopbackClient: NSObject, SignalingChannel, RTCPeerConnectionDelegate, @unchecked Sendable {
     let engine: MediaEngine
     let factory: RTCPeerConnectionFactory

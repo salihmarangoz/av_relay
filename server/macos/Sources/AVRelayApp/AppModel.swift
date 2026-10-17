@@ -79,7 +79,8 @@ final class AppModel: ObservableObject {
 
     static let defaultPort: UInt16 = 48100
     static var version: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev" }
-    static var macName: String { Host.current().localizedName ?? "Mac" }
+    /// This computer's name as the user set it, shown to receivers.
+    static var computerName: String { Host.current().localizedName ?? "Mac" }
 
     init() {
         let camera = defaults.string(forKey: Keys.camera)
@@ -174,7 +175,7 @@ final class AppModel: ObservableObject {
 
     private func startServer() async {
         guard let store else { return }
-        var configuration = RelayServer.Configuration(name: Self.macName, app: "AV Relay \(Self.version) macOS")
+        var configuration = RelayServer.Configuration(name: Self.computerName, app: "AV Relay \(Self.version) macOS")
         configuration.port = port
         let server = RelayServer(configuration: configuration, store: store)
         await server.setHandler(engine)

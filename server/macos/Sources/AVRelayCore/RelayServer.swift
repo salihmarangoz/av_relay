@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// The Mac's control server (docs/protocol.md, sections 4 to 7, 10 and 11):
+// The sender's control server (docs/protocol.md, sections 4 to 7, 10 and 11):
 // listens on TCP, runs pairing while the user has the pairing window open,
 // and serves one authenticated session at a time. Media is not handled
 // here; a SessionHandler (the media engine) gets each session's messages.
@@ -35,7 +35,7 @@ public actor RelayServer {
     public struct Configuration: Sendable {
         /// 0 picks a free port (tests).
         public var port: UInt16 = 48100
-        /// The Mac's name as shown to clients.
+        /// This computer's name as shown to receivers.
         public var name: String
         /// "AV Relay 0.1.0 macOS".
         public var app: String
@@ -77,7 +77,7 @@ public actor RelayServer {
     private var window: PairingWindow?
     private var windowTimer: Task<Void, Never>?
     private var active: ServerSession?
-    /// The Mac is going to sleep: no sessions or pairing until it's awake.
+    /// The computer is going to sleep: no sessions or pairing until it's awake.
     private var suspended = false
     private let log = Logger(subsystem: "io.github.salihmarangoz.avrelay", category: "server")
 
@@ -141,7 +141,7 @@ public actor RelayServer {
         return ready
     }
 
-    /// The Mac is going to sleep: ends the session with bye(sleep), closes
+    /// The computer is going to sleep: ends the session with bye(sleep), closes
     /// the pairing window, and refuses new sessions and pairing until
     /// `resume()`, so a client reconnecting at once can't restart capture
     /// in the last moments before sleep.
@@ -154,7 +154,7 @@ public actor RelayServer {
         endSession(session, reason: "sleep")
     }
 
-    /// The Mac is awake again: sessions and pairing are welcome.
+    /// The computer is awake again: sessions and pairing are welcome.
     public func resume() {
         suspended = false
     }
@@ -565,7 +565,7 @@ public actor ServerSession {
         (events, deliver) = AsyncStream.makeStream(of: SessionEvent.self)
     }
 
-    /// The Mac's address on this connection: the one to offer ICE candidates on.
+    /// Our address on this connection: the one to offer ICE candidates on.
     public nonisolated var localAddress: String? { connection.localAddress }
     public nonisolated var remoteAddress: String? { connection.remoteAddress }
 

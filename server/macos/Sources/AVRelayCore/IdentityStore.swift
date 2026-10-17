@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// The Mac's static key and its list of paired clients (docs/protocol.md, section 2).
+// The sender's static key and its list of paired receivers (docs/protocol.md, section 2).
 //
 // Both live in files in the app's support folder (mode 0700), the key
 // readable only by the user (mode 0600), like an SSH key. Not the Keychain:

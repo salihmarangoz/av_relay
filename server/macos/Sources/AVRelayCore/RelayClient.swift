@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The client side of pairing and sessions (docs/protocol.md, sections 5 and 6).
-// The Mac app doesn't need it; the tests drive the server with it.
+// The sender app doesn't need it; the tests drive the server with it.
 
 import Foundation
 
@@ -22,7 +22,7 @@ public struct PairedServer: Sendable, Equatable {
 }
 
 public enum RelayClient {
-    /// Pairs with the server at host:port using the code shown on the Mac.
+    /// Pairs with the sender at host:port using the code it shows.
     public static func pair(host: String, port: UInt16, code: PairingCode, identity: NoiseKeyPair,
                             info: ClientInfo) async throws -> PairedServer {
         let connection = try await FramedConnection.connect(host: host, port: port)

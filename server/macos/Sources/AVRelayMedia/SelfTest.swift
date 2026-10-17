@@ -60,7 +60,7 @@ public enum SelfTest {
         let source = stats?.statistics.values.first { $0.type == "media-source" && $0.values["kind"] as? String == "audio" }
         let level = (source?.values["audioLevel"] as? NSNumber)?.doubleValue ?? 0
         let outbound = stats?.statistics.values.first { $0.type == "outbound-rtp" && $0.values["kind"] as? String == "video" }
-        // In low light a Mac camera lowers its frame rate to expose longer: that's the camera's
+        // In low light a camera lowers its frame rate to expose longer: that's the camera's
         // choice, not a fault here. What must hold is that every captured frame gets through.
         report.check(fps >= cameraFPS * 0.9 - 1, String(format: "video: %.1f fps decoded of %.1f captured", fps, cameraFPS))
         if cameraFPS < Double(format.fps) * 0.8 {
