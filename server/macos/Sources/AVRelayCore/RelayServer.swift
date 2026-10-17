@@ -77,6 +77,8 @@ public actor RelayServer {
     private var window: PairingWindow?
     private var windowTimer: Task<Void, Never>?
     private var active: ServerSession?
+    /// The Mac is going to sleep: no sessions or pairing until it's awake.
+    private var suspended = false
     private let log = Logger(subsystem: "io.github.salihmarangoz.avrelay", category: "server")
 
     struct PairingWindow {
@@ -139,14 +141,22 @@ public actor RelayServer {
         return ready
     }
 
-    /// Ends the current session, saying bye first: before the Mac sleeps, so
-    /// capture stops now and can't resume on wake for a client that's gone.
-    /// The client reconnects once the Mac is awake.
-    public func endActiveSession() async {
+    /// The Mac is going to sleep: ends the session with bye(sleep), closes
+    /// the pairing window, and refuses new sessions and pairing until
+    /// `resume()`, so a client reconnecting at once can't restart capture
+    /// in the last moments before sleep.
+    public func suspend() async {
+        suspended = true
+        closePairingWindow()
         guard let session = active else { return }
         active = nil
-        await session.close(sending: .bye(.quit))
-        endSession(session, reason: "quit")
+        await session.close(sending: .bye(.sleep))
+        endSession(session, reason: "sleep")
+    }
+
+    /// The Mac is awake again: sessions and pairing are welcome.
+    public func resume() {
+        suspended = false
     }
 
     public func stop() async {
@@ -264,7 +274,7 @@ public actor RelayServer {
     // MARK: Connections
 
     private func accept(_ nw: NWConnection) async {
-        guard unauthenticated < configuration.maxUnauthenticated else {
+        guard !suspended, unauthenticated < configuration.maxUnauthenticated else {
             nw.cancel()
             return
         }
@@ -341,7 +351,7 @@ public actor RelayServer {
                 return
             }
             let code: PairingCode
-            switch consumeCode(windowID) {
+            switch suspended ? .failure(.notPairing) : consumeCode(windowID) {
             case .success(let c): code = c
             case .failure(let error):
                 try? await sendPlain(.error(error), on: connection)
@@ -425,6 +435,12 @@ public actor RelayServer {
         // waited for hello, so look it up again.
         guard let current = store.client(publicKey: clientKey) else {
             try? await connection.send(try transport.encrypt(JSON.encode(Message.error(.notPaired))))
+            connection.closeGracefully()
+            return nil
+        }
+        // Going to sleep since this connection came in: no new session.
+        if suspended {
+            try? await connection.send(try transport.encrypt(JSON.encode(Message.bye(.sleep))))
             connection.closeGracefully()
             return nil
         }

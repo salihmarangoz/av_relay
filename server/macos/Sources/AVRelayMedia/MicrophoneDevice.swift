@@ -137,6 +137,15 @@ final class MicrophoneDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
         return true
     }
 
+    /// Stops now and returns once the microphone is closed (before sleep).
+    /// libwebrtc's next startRecording opens it again.
+    func stopNow() {
+        queue.sync {
+            recording = false
+            stopCapture()
+        }
+    }
+
     // MARK: Capture (on `queue`)
 
     private func startCapture() {

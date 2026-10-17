@@ -294,7 +294,7 @@ fields. Binary values are base64.
 | `ice` | `candidate`, `sdpMid`, `sdpMLineIndex` | As above. |
 | `media-state` | `video: {...}`, `audio: {...}` | The state of capture (section 9). Sent after `welcome` and on every change. |
 | `pong` | `id` | Answer to `ping`, same `id`. |
-| `bye` | `reason` | The server is closing: `quit`, `unpaired` (the user removed this client on the Mac), `replaced`. |
+| `bye` | `reason` | The server is closing: `quit`, `unpaired` (the user removed this client on the Mac), `replaced`, `sleep` (the Mac is going to sleep: it refuses new sessions until it's awake, so the client SHOULD back off, e.g. 30 s, or wait for its Bonjour announcement, instead of retrying at once). Clients treat a reason they don't know like `quit`. |
 | `error` | `code`, `message` | Section 11. |
 
 `media-state` objects:

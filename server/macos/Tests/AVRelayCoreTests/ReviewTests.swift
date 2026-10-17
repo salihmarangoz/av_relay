@@ -188,8 +188,9 @@ struct RawSession {
         #expect(f.server.store.pairedClients.isEmpty)
     }
 
-    /// Review T14 #1: before sleep the session ends with bye, and the handler hears it.
-    @Test func endActiveSessionSaysByeAndEnds() async throws {
+    /// Review T14 #1: before sleep the session ends with bye(sleep), and
+    /// until wake nobody gets a new session or a pairing.
+    @Test func suspendForSleep() async throws {
         let f = try await Fixture()
         defer { Task { await f.cleanUp() } }
         let me = NoiseKeyPair()
@@ -197,10 +198,23 @@ struct RawSession {
         let session = try await f.session(me, server: paired.publicKey)
         _ = try await session.receive()  // welcome
         _ = try await session.receive()  // offer
-        await f.server.endActiveSession()
-        #expect(try await session.receive() == .bye(.quit))
+        await f.server.suspend()
+        #expect(try await session.receive() == .bye(.sleep))
         #expect(await eventually { f.handler.ended == 1 })
         #expect(await f.server.activeSession == nil)
+
+        // Reconnecting at once gets nowhere while the Mac goes to sleep.
+        await #expect(throws: (any Error).self) {
+            let again = try await f.session(me, server: paired.publicKey)
+            _ = try await again.receive()
+        }
+        await #expect(throws: (any Error).self) { _ = try await f.pair(NoiseKeyPair()) }
+        #expect(f.handler.started == 1)
+
+        // Awake: sessions are welcome again.
+        await f.server.resume()
+        let after = try await f.session(me, server: paired.publicKey)
+        #expect(try await after.receive() == .welcome(name: "Test Mac", app: "AV Relay test", deviceID: f.server.store.deviceID))
     }
 
     @Test func unknownModeOfAFutureVersionGetsTheVersionError() async throws {

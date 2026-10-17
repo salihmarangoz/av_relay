@@ -81,7 +81,13 @@ sign=(codesign --force --timestamp=none --sign "$identity")
 if [[ -n ${AVRELAY_SIGN_KEYCHAIN:-} ]]; then
 	if [[ -n ${AVRELAY_SIGN_KEYCHAIN_PASSWORD_FILE:-} ]]; then
 		# Through security's command mode on stdin: a -p argument would show in ps.
-		printf 'unlock-keychain -p "%s" "%s"\n' "$(cat "$AVRELAY_SIGN_KEYCHAIN_PASSWORD_FILE")" "$AVRELAY_SIGN_KEYCHAIN" | security -i >/dev/null
+		password=$(cat "$AVRELAY_SIGN_KEYCHAIN_PASSWORD_FILE")
+		if [[ $password == *[\"\\]* ]]; then
+			echo "The keychain password can't contain \" or \\ (security -i would misread it)." >&2
+			exit 1
+		fi
+		printf 'unlock-keychain -p "%s" "%s"\n' "$password" "$AVRELAY_SIGN_KEYCHAIN" | security -i >/dev/null
+		unset password
 	fi
 	sign+=(--keychain "$AVRELAY_SIGN_KEYCHAIN")
 fi

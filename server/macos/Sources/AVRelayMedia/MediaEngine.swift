@@ -78,6 +78,21 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
         microphone.onFailure = { [weak self] error in self?.queue.async { self?.call?.deviceFailed(.audio, error) } }
     }
 
+    /// Ends the call and returns once the camera and microphone are closed:
+    /// the Mac is about to sleep, and must not resume capture on wake.
+    public func stopAll() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            queue.async { [self] in
+                call?.close()
+                call = nil
+                camera.stopNow()
+                microphone.stopNow()
+                onStatus?(.idle)
+                continuation.resume()
+            }
+        }
+    }
+
     /// Frames the camera has delivered, and its mode (diagnostics).
     var cameraFramesCaptured: Int { camera.framesCaptured }
     var cameraMode: String? { camera.activeMode }

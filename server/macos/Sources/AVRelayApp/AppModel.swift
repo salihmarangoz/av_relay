@@ -69,6 +69,7 @@ final class AppModel: ObservableObject {
     private var eventsTask: Task<Void, Never>?
     private var deviceObservers: [NSObjectProtocol] = []
     private var systemObservers: [NSObjectProtocol] = []
+    private var sleepWatcher: SleepWatcher?
 
     enum Keys {
         static let camera = "camera", microphone = "microphone", port = "port"
@@ -118,13 +119,20 @@ final class AppModel: ObservableObject {
         Task { await startServer() }
     }
 
-    /// Before the Mac sleeps, end the session: capture stops now, and can't
-    /// resume on wake for a client that's long gone (the client reconnects
-    /// after the wake). On quit, say bye so the client knows at once.
+    /// Before the Mac sleeps: end the session (bye "sleep"), refuse new ones
+    /// until the wake, and close the camera and microphone; only then let
+    /// the sleep go on. So capture can't resume on wake for a client that's
+    /// long gone; the client reconnects after the wake. On quit, say bye so
+    /// the client knows at once.
     private func observeSleepAndQuit() {
-        systemObservers.append(NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in await self?.server?.endActiveSession() }
+        sleepWatcher = SleepWatcher(willSleep: { [weak self] proceed in
+            Task { @MainActor in
+                await self?.server?.suspend()
+                await self?.engine.stopAll()
+                proceed()
+            }
+        }, didWake: { [weak self] in
+            Task { @MainActor in await self?.server?.resume() }
         })
         systemObservers.append(NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in

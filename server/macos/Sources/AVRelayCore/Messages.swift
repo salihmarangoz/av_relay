@@ -100,7 +100,7 @@ public enum ErrorCode: String, Codable, Sendable, Error {
     case `internal`
 }
 
-public enum ByeReason: String, Codable, Sendable { case quit, unpaired, replaced }
+public enum ByeReason: String, Codable, Sendable { case quit, unpaired, replaced, sleep }
 
 /// A message of the protocol, by its `type`.
 public enum Message: Sendable, Equatable {

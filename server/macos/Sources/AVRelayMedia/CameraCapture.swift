@@ -101,6 +101,14 @@ final class CameraCapture: NSObject, @unchecked Sendable {
         }
     }
 
+    /// Stops now and returns once the camera is closed (before sleep).
+    func stopNow() {
+        queue.sync {
+            running = false
+            stopCapture()
+        }
+    }
+
     // MARK: On `queue`
 
     private func startCapture(format: VideoFormat) {
