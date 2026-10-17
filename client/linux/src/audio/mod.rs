@@ -210,7 +210,9 @@ fn run(cmd_rx: pw::channel::Receiver<Cmd>, ready: &mpsc::Sender<Result<()>>) -> 
                 }
             }
             Cmd::StopMic => {
-                mic.borrow_mut().take();
+                if mic.borrow_mut().take().is_some() {
+                    log::info!("virtual microphone removed");
+                }
             }
             Cmd::SetDefaultSource(name) => set_default_source(&mut defaults.borrow_mut(), name),
             Cmd::GetDefaultSource(reply) => {

@@ -305,6 +305,18 @@ enum Event {
     Media(MediaEvent),
 }
 
+/// Removes the virtual microphone however the session ends: like the
+/// camera, it exists only while the Mac is connected.
+struct MicNodeGuard<'a>(&'a Core);
+
+impl Drop for MicNodeGuard<'_> {
+    fn drop(&mut self) {
+        if let Err(e) = self.0.pw.stop_mic() {
+            log::warn!("removing the virtual microphone: {e:#}");
+        }
+    }
+}
+
 /// Undoes the default-input change however the session ends.
 struct DefaultInputGuard<'a>(&'a Core);
 
@@ -390,6 +402,9 @@ async fn serve(
             let _ = tx.send(Event::MicUsed(used));
         }
     })?);
+    // Declared first, so it drops last: the default input goes back before
+    // the microphone node it points at is removed.
+    let _mic_node = MicNodeGuard(core);
     core.default_input.take_over(&core.pw)?;
     let _default_input = DefaultInputGuard(core);
     let receiver = Receiver::new(
