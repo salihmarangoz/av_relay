@@ -22,7 +22,7 @@ assets/              logo script and the icons it generates
 
 ```
 ┌──────────────────── Mac (server) ─────────────────────┐        ┌──────────────── Ubuntu (client) ────────────────┐
-│ menu bar UI: Allow pairing (code), devices, status    │        │ tray: Pair device…, status, Forget              │
+│ menu bar UI: Allow Pairing (code), devices, status    │        │ tray: Pair device…, status, Forget              │
 │                                                       │        │                                                 │
 │ control server (TCP 48100) ◄── Noise IK, JSON ─────────────────── control client ── reconnect (last IP, mDNS)   │
 │   pairing: CPace + Noise XXpsk3                       │        │   pairing: CPace + Noise XXpsk3                 │
@@ -88,7 +88,7 @@ A menu bar app (no Dock icon) in Swift. Deployment target macOS 14.
 | Bonjour | advertises `_avrelay._tcp` with TXT `v=1`, `id=` |
 | Media engine | libwebrtc peer connection (offerer): H.264 via VideoToolbox, Opus, GCC/pacing/RTX built in |
 | Capture | camera through `AVCaptureSession` into a libwebrtc video source, started and stopped on demand; microphone the same way, with audio processing off |
-| Menu | status (connected device, camera/mic in use), *Allow pairing…*, paired devices (remove), camera/mic choice, port, quit |
+| Menu | status (connected device, camera/mic in use), *Allow Pairing…*, paired devices (remove), camera/mic choice, port, quit |
 
 Camera and microphone access are asked for the first time they're needed
 (macOS shows its permission prompt then). While a device is off, the app

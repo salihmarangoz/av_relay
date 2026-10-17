@@ -20,7 +20,7 @@ const PAIRING_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, thiserror::Error)]
 pub enum PairError {
-    #[error("The Mac isn't waiting for a pairing. On the Mac, choose Allow pairing… in the AV Relay menu.")]
+    #[error("The Mac isn't waiting for a pairing. On the Mac, choose Allow Pairing… in the AV Relay menu.")]
     NotPairing,
     #[error("The Mac is busy with another pairing attempt. Try again in a moment.")]
     Busy,

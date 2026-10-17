@@ -96,7 +96,7 @@ minutes). Type the address and port the Mac shows. A VPN or a guest Wi-Fi
 that isolates devices can block it.
 
 **"Pairing failed. Check the code…"** Each code works once. Open **Allow
-pairing…** on the Mac again for a new one.
+Pairing…** on the Mac again for a new one.
 
 **"Couldn't authenticate the Mac."** AV Relay was reset or reinstalled on the
 Mac, so it has a new key. Forget the Mac in the top bar menu and pair again.

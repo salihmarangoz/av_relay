@@ -79,7 +79,7 @@ fn build(ui: &Rc<Ui>) -> adw::Window {
     let address_page = page();
     address_page.append(&label("Pair with your Mac", &["title-2"]));
     address_page.append(&label(
-        "On the Mac, open AV Relay in the menu bar and choose Allow pairing…, then enter the address and port it shows.",
+        "On the Mac, open AV Relay in the menu bar and choose Allow Pairing…, then enter the address and port it shows.",
         &["dim-label"],
     ));
     let fields = adw::PreferencesGroup::new();

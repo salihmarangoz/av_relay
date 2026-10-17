@@ -119,7 +119,7 @@ sides used the same code.
 
 ### 5.1 The pairing window on the Mac
 
-- The user opens it (menu bar → *Allow pairing…*). Only a person at the Mac
+- The user opens it (menu bar → *Allow Pairing…*). Only a person at the Mac
   can open it; nothing on the network can.
 - The server draws a code: a uniform random integer 0–999999 from the system
   CSPRNG, written as 6 ASCII digits with leading zeros (`042137`). It shows
