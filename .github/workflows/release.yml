@@ -1,5 +1,8 @@
-# On a version tag (v1.2.3): build both apps and publish them as a GitHub
-# Release: the Mac .zip and .dmg, and the Linux .deb.
+# On a version tag (v1.2.3, made by scripts/release.py): check that the
+# tree says that version everywhere, build both apps, and publish them as a
+# GitHub Release, the Mac .zip and .dmg and the Linux .deb, with the
+# changelog's section as the notes. A version with a "-" (1.2.3-rc.1) is a
+# pre-release. See docs/releasing.md.
 name: Release
 
 on:
@@ -10,8 +13,16 @@ permissions:
   contents: write
 
 jobs:
+  check:
+    name: Version and changelog
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 -I scripts/release.py --check "$GITHUB_REF_NAME"
+
   macos:
     name: Mac app
+    needs: check
     runs-on: macos-26
     defaults:
       run:
@@ -31,6 +42,7 @@ jobs:
 
   linux:
     name: Linux .deb
+    needs: check
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -39,8 +51,6 @@ jobs:
       - uses: actions/checkout@v7
       - run: sudo apt-get update && scripts/install-build-deps.sh
       - uses: dtolnay/rust-toolchain@stable
-      - name: Take the version from the tag
-        run: sed -i "0,/^version = .*/s//version = \"${GITHUB_REF_NAME#v}\"/" Cargo.toml
       - run: cargo test
       - uses: taiki-e/install-action@v2
         with:
@@ -56,6 +66,7 @@ jobs:
     needs: [macos, linux]
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           pattern: release-*
@@ -66,5 +77,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ls -l dist
-          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
-            --title "AV Relay ${GITHUB_REF_NAME#v}" --generate-notes
+          python3 -I scripts/release.py --notes "$GITHUB_REF_NAME" > notes.md
+          prerelease=()
+          [[ $GITHUB_REF_NAME == *-* ]] && prerelease=(--prerelease)
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "AV Relay ${GITHUB_REF_NAME#v}" --notes-file notes.md "${prerelease[@]}"

@@ -139,6 +139,8 @@ receiver, over Wi-Fi.
   [docs/linux.md](docs/linux.md#building-from-source)
 - Both follow [docs/protocol.md](docs/protocol.md) and test against the shared
   vectors in [tests/vectors](tests/vectors).
+- What changed in each release: [CHANGELOG.md](CHANGELOG.md); how a release
+  is made: [docs/releasing.md](docs/releasing.md).
 
 ## License
 

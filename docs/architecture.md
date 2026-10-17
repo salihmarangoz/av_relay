@@ -185,7 +185,11 @@ sequenceDiagram
 
 GitHub Actions tests and builds both apps when their code changes on main or
 in a pull request (the macOS one also on demand, as macOS runner minutes
-are costly), and attaches them to a GitHub Release on every `v*` tag:
+are costly). Both are released together with one version:
+`scripts/release.py X.Y.Z` moves the changelog's entries under the version,
+sets it in the Linux package and tags `vX.Y.Z`; pushing the tag checks that
+they agree, builds both, and publishes a GitHub Release with the changelog's
+section as its notes (docs/releasing.md):
 
 - **macOS sender** (macOS runner): test, build the app for Apple silicon and
   Intel, ad-hoc sign it, publish `AV-Relay-<version>-macOS.zip` and `.dmg`.
