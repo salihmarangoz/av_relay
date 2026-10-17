@@ -14,6 +14,9 @@ public enum CameraSource: Sendable, Equatable {
     case device(id: String?)
     /// Moving color bars, for tests: no hardware, no permission prompt.
     case testPattern
+    /// Black, with one white frame every 2 s, for measuring A/V sync with
+    /// the microphone's `syncTest` (SyncTestSignal).
+    case syncTest
 }
 
 final class CameraCapture: NSObject, @unchecked Sendable {
@@ -56,6 +59,7 @@ final class CameraCapture: NSObject, @unchecked Sendable {
     static func deviceName(for source: CameraSource) -> String? {
         switch source {
         case .testPattern: return "Test pattern"
+        case .syncTest: return "Sync test (a white frame every 2 s)"
         case .device(let id): return captureDevice(id: id)?.localizedName
         }
     }
@@ -122,6 +126,7 @@ final class CameraCapture: NSObject, @unchecked Sendable {
         let started = generation
         switch source {
         case .testPattern: startPattern(format: format)
+        case .syncTest: startSyncTest(format: format)
         case .device(let id): startDevice(id: id, format: format, generation: started)
         }
         // A camera that never delivers (stuck, taken by another app) is a failure, not "starting" forever.
@@ -230,6 +235,50 @@ final class CameraCapture: NSObject, @unchecked Sendable {
         }
         self.timer = timer
         timer.resume()
+    }
+
+    /// Frames on SyncTestSignal's grid, each delivered once its capture time
+    /// has come and stamped with that time, so the white one is captured at
+    /// a whole multiple of 2 s on the host clock.
+    private func startSyncTest(format: VideoFormat) {
+        let attributes: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+            kCVPixelBufferWidthKey as String: format.width,
+            kCVPixelBufferHeightKey as String: format.height,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
+        ]
+        CVPixelBufferPoolCreate(nil, nil, attributes as CFDictionary, &pool)
+        let fps = format.fps
+        var next = SyncTestSignal.frameIndex(atOrBefore: SyncTestSignal.nowNs, fps: fps) + 1
+        // Dispatch's uptime clock is the host clock: the timer fires at each frame's capture time.
+        let due = { DispatchTime(uptimeNanoseconds: SyncTestSignal.frameTime(next, fps: fps)) }
+        let timer = DispatchSource.makeTimerSource(flags: .strict, queue: queue)
+        timer.setEventHandler { [self] in
+            guard let pool else { return }
+            // After a stall, only the newest: a camera doesn't deliver the past either.
+            next = max(next, SyncTestSignal.frameIndex(atOrBefore: SyncTestSignal.nowNs, fps: fps))
+            var buffer: CVPixelBuffer?
+            CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer)
+            if let buffer {
+                Self.fill(buffer, luma: SyncTestSignal.isFlash(frame: next, fps: fps) ? 235 : 16)
+                deliver(buffer, timeNs: Int64(SyncTestSignal.frameTime(next, fps: fps)))
+            }
+            next += 1
+            self.timer?.schedule(deadline: due(), leeway: .microseconds(200))
+        }
+        timer.schedule(deadline: due(), leeway: .microseconds(200))
+        self.timer = timer
+        timer.resume()
+    }
+
+    /// A flat grey level in NV12 (limited range: 16 black, 235 white).
+    private static func fill(_ buffer: CVPixelBuffer, luma: UInt8) {
+        CVPixelBufferLockBaseAddress(buffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+        memset(CVPixelBufferGetBaseAddressOfPlane(buffer, 0)!, Int32(luma),
+               CVPixelBufferGetBytesPerRowOfPlane(buffer, 0) * CVPixelBufferGetHeightOfPlane(buffer, 0))
+        memset(CVPixelBufferGetBaseAddressOfPlane(buffer, 1)!, 128,
+               CVPixelBufferGetBytesPerRowOfPlane(buffer, 1) * CVPixelBufferGetHeightOfPlane(buffer, 1))
     }
 
     private static let nanosecondsPerTick: Double = {

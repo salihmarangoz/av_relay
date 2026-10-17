@@ -93,6 +93,11 @@ final class AppModel: ObservableObject {
     }
 
     static let defaultPort: UInt16 = 48100
+    /// `open --env AVRELAY_TEST_SOURCE=sync "/Applications/AV Relay.app"`: a white
+    /// frame and a beep every 2 s, captured at the same instant, instead of the
+    /// camera and microphone, for measuring A/V sync at a receiver. Same
+    /// identity and pairings; the next normal start uses the devices again.
+    static let syncTest = ProcessInfo.processInfo.environment["AVRELAY_TEST_SOURCE"] == "sync"
     static var version: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev" }
     /// This computer's name as the user set it, shown to receivers.
     static var computerName: String { Host.current().localizedName ?? "Mac" }
@@ -108,8 +113,8 @@ final class AppModel: ObservableObject {
         port = (1...65535).contains(savedPort) ? UInt16(savedPort) : Self.defaultPort
 
         var settings = MediaEngine.Settings()
-        settings.camera = .device(id: camera)
-        settings.microphone = .device(id: microphone)
+        settings.camera = Self.syncTest ? .syncTest : .device(id: camera)
+        settings.microphone = Self.syncTest ? .syncTest : .device(id: microphone)
         engine = MediaEngine(settings: settings)
 
         var opened: IdentityStore?
