@@ -33,7 +33,7 @@ The first release.
   on the Mac, up to 1080p at 30 fps) and Opus audio, with congestion
   control, retransmission and keyframe requests. The receiver plays sound
   and picture with one delay, set from the network's measured delay over
-  the last minute (0.1 s on a calm network, up to 2 s on a stalling Wi-Fi)
+  the last minute (0.2 s on a calm network, up to 2 s on a stalling Wi-Fi)
   and remembered for the next call, so both stay smooth and in sync (audio
   within ~30 ms of the picture).
 - **Security**: the control channel is Noise IK with the keys from pairing

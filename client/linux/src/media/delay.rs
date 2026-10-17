@@ -20,9 +20,10 @@ use std::time::Duration;
 const WINDOW: f64 = 60.0;
 /// Bucket length for the window's minimum and maximum.
 const BUCKET: f64 = 1.0;
-/// The delay never goes below this (normal jitter, a retransmission on a
-/// LAN, a video frame's packets)...
-pub const MIN: Duration = Duration::from_millis(100);
+/// The delay never goes below this: normal jitter, a retransmission, a
+/// keyframe's packets, and the occasional Wi-Fi hiccup of 0.1-0.2 s even
+/// after a calm minute (the host: no stutter first, delay is fine)...
+pub const MIN: Duration = Duration::from_millis(200);
 /// ...or above this (the host's limit).
 pub const MAX: Duration = Duration::from_millis(2000);
 /// Added to the spread.
