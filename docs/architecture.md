@@ -83,12 +83,32 @@ A menu bar app (no Dock icon) in Swift. Deployment target macOS 14.
 | Identity | X25519 static key, device ID, the list of paired clients: files in `~/Library/Application Support/AV Relay/` (folder 0700, key 0600), like an SSH key. Not the Keychain: ad-hoc signed updates change the app's signature, and the Keychain would ask the user to allow access again after each update. |
 | Pairing | the window: code, countdown, addresses; CPace (libsodium's ristretto255) + Noise XXpsk3 |
 | Noise | Noise_IK / XXpsk3 on CryptoKit (X25519, ChaChaPoly, SHA-256), tested against `tests/vectors` |
-| `avrelay-devserver` | the same server headless, without media: for interop tests (`tests/interop/reference_client.py`) and for developing a client without the Mac app |
+| `avrelay-devserver` | the same server headless: for interop tests (`tests/interop/reference_client.py`) and for developing a client; `--media test` runs the real media engine with a test pattern and tone |
 | Control server | `NWListener` on TCP 48100: framing, preamble, one session at a time, keepalive |
 | Bonjour | advertises `_avrelay._tcp` with TXT `v=1`, `id=` |
-| Media engine | libwebrtc peer connection (offerer): H.264 via VideoToolbox, Opus, GCC/pacing/RTX built in |
-| Capture | camera through `AVCaptureSession` into a libwebrtc video source, started and stopped on demand; microphone the same way, with audio processing off |
-| Menu | status (connected device, camera/mic in use), *Allow Pairing…*, paired devices (remove), camera/mic choice, port, quit |
+| Media engine | libwebrtc peer connection (offerer): H.264 (VideoToolbox) and Opus only, both m-sections negotiated once; GCC, pacing and RTX built in |
+| Camera | `AVCaptureSession` into libwebrtc's video source: the smallest camera mode that covers the requested format, scaled to it exactly |
+| Microphone | AV Relay's own libwebrtc audio device: captures the chosen microphone (the built-in one unless the user picks another) and nothing is played out; echo cancellation, gain control and noise suppression off |
+| Menu | status (connected device, camera/mic in use), *Allow Pairing…*, paired devices (remove), camera/mic choice, Open at Login, Settings (port), quit |
+
+**On demand without renegotiation.** A kind turns on by resuming its
+sender's encoding and off (3 seconds after the client stops using it) by
+pausing it. Pausing the audio sender makes libwebrtc stop recording, which
+closes the microphone; resuming the video sender restarts the encoder, so
+the first frame is a keyframe.
+
+**Starting at full quality.** libwebrtc caps an H.264 encoder's frame rate
+to what the negotiated level allows, and a client's answer may simply echo
+level 3.1 (1080p at about 13 fps), so the encoder runs at level 5.1, which
+every client must decode (protocol section 8.2). The bandwidth estimate
+starts at half the format's cap instead of libwebrtc's ~300 kbit/s, which
+would also make it start 1080p at a lower resolution; GCC still backs off
+if the Wi-Fi can't carry it.
+
+**Testing the real devices.** Only an app bundle may open the camera and
+microphone, so the app has a self-test (`--self-test`) that sends both
+through capture, encoding, WebRTC and decoding in one process; see
+`server/macos/README.md`.
 
 Camera and microphone access are asked for the first time they're needed
 (macOS shows its permission prompt then). While a device is off, the app

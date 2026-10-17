@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Builds "AV Relay.app" (one binary for Apple silicon and Intel), signs it
-# ad hoc, and packs it as a .zip and a .dmg.
+# Builds "AV Relay.app" (one binary for Apple silicon and Intel), signs it,
+# and packs it as a .zip and a .dmg.
 #
 #   scripts/build-app.sh [--version 1.2.3] [--out DIR] [--native]
 #
 # --native builds for this Mac's architecture only (faster, for testing).
+#
+# Signing is ad hoc unless AVRELAY_SIGN_IDENTITY names a code-signing
+# identity of yours (a self-signed one is fine). A stable signature keeps
+# macOS's camera and microphone permission across rebuilds; an ad hoc one
+# changes with every build. If the identity lives in a keychain of its own:
+# AVRELAY_SIGN_KEYCHAIN=path and AVRELAY_SIGN_KEYCHAIN_PASSWORD_FILE=file
+# unlock it first.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -46,10 +53,19 @@ otool -l "$exe" | awk '/cmd LC_RPATH/ { getline; getline; print $2 }' | while re
 	esac
 done
 
-# Ad hoc signature (no Apple Developer ID), inside out.
-codesign --force --sign - --timestamp=none "$app/Contents/Frameworks/WebRTC.framework"
-codesign --force --sign - --timestamp=none "$app"
+# Sign inside out: ad hoc by default (no Apple Developer ID), or with the given identity.
+identity=${AVRELAY_SIGN_IDENTITY:--}
+sign=(codesign --force --timestamp=none --sign "$identity")
+if [[ -n ${AVRELAY_SIGN_KEYCHAIN:-} ]]; then
+	if [[ -n ${AVRELAY_SIGN_KEYCHAIN_PASSWORD_FILE:-} ]]; then
+		security unlock-keychain -p "$(cat "$AVRELAY_SIGN_KEYCHAIN_PASSWORD_FILE")" "$AVRELAY_SIGN_KEYCHAIN"
+	fi
+	sign+=(--keychain "$AVRELAY_SIGN_KEYCHAIN")
+fi
+"${sign[@]}" "$app/Contents/Frameworks/WebRTC.framework"
+"${sign[@]}" --identifier io.github.salihmarangoz.avrelay "$app"
 codesign --verify --strict --deep "$app"
+echo "Signed with: $( [[ $identity == - ]] && echo "ad hoc" || echo "$identity")"
 
 name="AV-Relay-$version-macOS"
 rm -f "$out/$name.zip" "$out/$name.dmg"
