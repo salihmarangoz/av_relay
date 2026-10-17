@@ -11,7 +11,7 @@ AV Relay has two sides. The **sender** shares its camera and microphone. The
 Camera** and **AV Relay Microphone**, so every app can use them: Firefox,
 Chrome, Discord, Zoom, OBS, … Today the sender runs on a Mac and the receiver
 on Ubuntu or Windows, on the same network. The initial Windows receiver
-uses OBS Virtual Camera and VB-CABLE, with a manual microphone switch.
+uses OBS Virtual Camera and VB-CABLE.
 
 - **On demand.** The sender's camera and microphone run only while an app on
   the receiver uses them. Close the call and the camera light goes out.

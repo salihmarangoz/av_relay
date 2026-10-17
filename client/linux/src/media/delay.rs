@@ -40,6 +40,10 @@ const FALL_STEP: f64 = 0.001;
 /// A stream's first seconds don't count: what the sender queued while its
 /// camera or microphone started comes in a burst.
 const WARM_UP: f64 = 2.0;
+/// The same after a pause: media this much newer than the last packet
+/// means the sender's camera or microphone stopped and started again (on
+/// demand), not a stall, whose late packets carry the old timestamps.
+const RESUME: f64 = 1.0;
 /// How many recent sequence numbers to remember, to skip duplicates.
 const SEEN: usize = 4096;
 
@@ -58,6 +62,8 @@ pub struct Spread {
     last_ts: Option<i64>,
     /// Arrival and extended timestamp of the first packet (the origin).
     origin: Option<(f64, i64)>,
+    /// Packets arriving before this are the (re)start's burst.
+    warm_until: f64,
     buckets: VecDeque<Bucket>,
     /// Recent sequence numbers: a packet sent again (a bandwidth probe
     /// re-sending old packets, a retransmission that came after the
@@ -72,6 +78,7 @@ impl Spread {
             clock_rate: clock_rate as f64,
             last_ts: None,
             origin: None,
+            warm_until: 0.0,
             buckets: VecDeque::new(),
             seen: HashSet::new(),
             seen_order: VecDeque::new(),
@@ -96,10 +103,13 @@ impl Spread {
             None => ts as i64,
             Some(last) => last + ts.wrapping_sub(last as u32) as i32 as i64,
         };
+        if self.last_ts.is_none_or(|last| (ext - last) as f64 / self.clock_rate > RESUME) {
+            self.warm_until = arrival + WARM_UP;
+        }
         // Only forward: a retransmission or reordering mustn't move the base.
         self.last_ts = Some(self.last_ts.map_or(ext, |l| l.max(ext)));
         let (t0, ts0) = *self.origin.get_or_insert((arrival, ext));
-        if arrival - t0 < WARM_UP {
+        if arrival < self.warm_until {
             return;
         }
         let delay = (arrival - t0) - (ext - ts0) as f64 / self.clock_rate;
@@ -217,6 +227,29 @@ mod tests {
             s.observe(i as u16, start.wrapping_add(i * 3000), i as f64 / 30.0);
         }
         assert!(s.spread().unwrap() < 0.001);
+    }
+
+    #[test]
+    fn a_resumed_streams_burst_doesnt_count() {
+        let mut s = Spread::new(90_000);
+        for i in 0..300u32 {
+            s.observe(i as u16, i * 3000, i as f64 / 30.0);
+        }
+        // The camera stops for 20 s; when it starts again, its first second
+        // of frames comes 300 ms late, then on time.
+        for i in 0..300u32 {
+            let t = 30.0 + i as f64 / 30.0;
+            let late = if i < 30 { 0.3 } else { 0.0 };
+            s.observe((300 + i) as u16, (t * 90_000.0) as u32, t + late);
+        }
+        assert!(s.spread().unwrap() < 0.001, "{:?}", s.spread());
+    }
+
+    #[test]
+    fn a_long_stall_still_counts() {
+        let (mut s, mut seq) = (Spread::new(48_000), 0);
+        feed(&mut s, &mut seq, 0.0, 10.0, Some((5.0, 1.5)));
+        assert!((s.spread().unwrap() - 1.5).abs() < 0.02, "{:?}", s.spread());
     }
 
     #[test]

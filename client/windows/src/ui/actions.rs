@@ -9,8 +9,16 @@ impl Ui {
     }
     pub(super) unsafe fn command(&mut self, id: u16, notification: u16) {
         match id {
-            VIDEO => self.send(Command::Video(!self.video_on)),
-            AUDIO => self.send(Command::Audio(!self.audio_on)),
+            // Flipped here at once, so a second click before the receiver's
+            // answer toggles back; the answer (Event::Demand) corrects it.
+            VIDEO => {
+                self.video_on = !self.video_on;
+                self.send(Command::Video(self.video_on));
+            }
+            AUDIO => {
+                self.audio_on = !self.audio_on;
+                self.send(Command::Audio(self.audio_on));
+            }
             ENABLE => {
                 self.enabled = !self.enabled;
                 self.send(Command::Enable(self.enabled));
@@ -107,18 +115,11 @@ impl Ui {
                 }
             }
             DONE => self.show_page(Page::Status),
+            // Confirmed by window_proc, outside the borrow.
             FORGET => {
-                if MessageBoxW(
-                    self.hwnd,
-                    wide("Forget this sender? You will need a new code to pair again.").as_ptr(),
-                    wide("AV Relay").as_ptr(),
-                    MB_YESNO | MB_ICONQUESTION,
-                ) == IDYES
-                {
-                    self.sender = None;
-                    self.connected = false;
-                    self.send(Command::Forget);
-                }
+                self.sender = None;
+                self.connected = false;
+                self.send(Command::Forget);
             }
             SHOW => {
                 self.show_page(if self.sender.is_some() {
@@ -131,7 +132,8 @@ impl Ui {
             }
             QUIT => {
                 self.send(Command::Quit);
-                KillTimer(self.hwnd, 1);
+                KillTimer(self.hwnd, EVENT_TIMER);
+                KillTimer(self.hwnd, MENU_TIMER);
                 Shell_NotifyIconW(NIM_DELETE, &self.notice);
                 DestroyWindow(self.hwnd);
                 PostQuitMessage(0);
@@ -153,6 +155,14 @@ impl Ui {
         }
     }
     pub(super) unsafe fn tick(&mut self) {
+        if MISSED_PAINT.take() {
+            RedrawWindow(
+                self.hwnd,
+                ptr::null(),
+                ptr::null_mut(),
+                RDW_INVALIDATE | RDW_ALLCHILDREN,
+            );
+        }
         let mut changed = false;
         loop {
             match self.events.try_recv() {
@@ -279,21 +289,15 @@ impl Ui {
                 "Pair with a sender…"
             },
         );
-        EnableWindow(self.forget_action, self.sender.is_some() as i32);
-        EnableWindow(
-            self.video_button,
-            (self.enabled && self.sender.is_some()) as i32,
-        );
-        EnableWindow(
-            self.audio_button,
-            (self.enabled && self.sender.is_some()) as i32,
-        );
-        EnableWindow(self.min_button, autostart::enabled() as i32);
+        enable(self.forget_action, self.sender.is_some());
+        enable(self.video_button, self.enabled && self.sender.is_some());
+        enable(self.audio_button, self.enabled && self.sender.is_some());
+        enable(self.min_button, autostart::enabled());
         let selection = VIDEO_PRESETS
             .iter()
             .position(|(_, v)| *v == self.settings.video)
             .unwrap_or(1);
-        SendMessageW(self.resolution, CB_SETCURSEL, selection, 0);
+        select(self.resolution, selection);
         let count = SendMessageW(self.cable, CB_GETCOUNT, 0, 0);
         let mut chosen = 0;
         for i in 1..count {
@@ -304,11 +308,11 @@ impl Ui {
                 break;
             }
         }
-        SendMessageW(self.cable, CB_SETCURSEL, chosen as usize, 0);
+        select(self.cable, chosen as usize);
         set_text(
             self.footer,
             if self.problem.is_empty() {
-                "Choose OBS Virtual Camera and CABLE Output in your apps. Camera follows app use; switch the microphone off after a call."
+                "Choose OBS Virtual Camera and CABLE Output in your apps. The sender's camera and microphone run only while an app uses them."
             } else {
                 &self.problem
             },
@@ -317,14 +321,15 @@ impl Ui {
             self.footer as isize,
             (if self.problem.is_empty() { DIM } else { RED }, self.bg),
         );
-        EnableWindow(
-            self.next,
-            (self.manual || SendMessageW(self.list, LB_GETCURSEL, 0, 0) >= 0) as i32,
-        );
+        enable(self.next, self.manual || SendMessageW(self.list, LB_GETCURSEL, 0, 0) >= 0);
         self.update_tray(false);
         InvalidateRect(self.hwnd, ptr::null(), 0);
+        // Owner-drawn controls show state set_text doesn't change; the
+        // others repaint themselves when their text does.
         for &(hwnd, _) in &self.controls {
-            InvalidateRect(hwnd, ptr::null(), 0);
+            if GetWindowLongW(hwnd, GWL_STYLE) as u32 & BS_TYPEMASK as u32 == BS_OWNERDRAW as u32 {
+                InvalidateRect(hwnd, ptr::null(), 0);
+            }
         }
     }
     pub(super) unsafe fn update_tray(&mut self, force: bool) {
@@ -356,7 +361,8 @@ impl Ui {
             self.last_tip = tip;
         }
     }
-    pub(super) unsafe fn menu(&mut self) {
+    /// The tray menu; tray_menu shows it.
+    pub(super) unsafe fn menu(&self) -> HMENU {
         let menu = CreatePopupMenu();
         menu_item(menu, ENABLE, "Enable AV Relay", self.enabled, true);
         AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
@@ -434,22 +440,6 @@ impl Ui {
         AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
         menu_item(menu, SHOW, "Open AV Relay", false, true);
         menu_item(menu, QUIT, "Quit AV Relay", false, true);
-        let mut point = POINT { x: 0, y: 0 };
-        GetCursorPos(&mut point);
-        SetForegroundWindow(self.hwnd);
-        let choice = TrackPopupMenu(
-            menu,
-            TPM_RETURNCMD | TPM_RIGHTBUTTON,
-            point.x,
-            point.y,
-            0,
-            self.hwnd,
-            ptr::null(),
-        );
-        DestroyMenu(menu);
-        PostMessageW(self.hwnd, WM_NULL, 0, 0);
-        if choice > 0 {
-            self.command(choice as u16, 1);
-        }
+        menu
     }
 }

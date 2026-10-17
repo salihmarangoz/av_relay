@@ -7,10 +7,11 @@ playout code directly from `client/linux/src`; both run the same protocol tests.
 Windows-specific code supplies DPAPI key storage, OBS camera output and
 WASAPI audio playback through a virtual cable.
 
-The **Camera** switch makes the virtual camera available; the sender captures
-video only while an app reads it. Closing video in a call app stops the sender's
-camera after its three-second linger. **Microphone capture is manual**;
-turn its switch off after a call. Both switches start off at launch.
+The **Camera** and **Microphone** switches make the devices available; the
+sender captures video only while an app reads the virtual camera, and audio
+only while an app records from the cable (CABLE Output). Ending a call stops
+the sender's camera and microphone after its three-second linger; the
+switches stay on, and are remembered across launches.
 A paired sender reconnects automatically. The existing macOS sender needs no update.
 
 ## Prerequisites
@@ -74,15 +75,15 @@ MinGW development packages.
 1. On the sender, choose **AV Relay > Allow Pairing...**.
 2. On Windows, choose **Pair with a sender…**, select the sender (or use
    **Manual** to enter its address and port), then enter its six-digit code.
-3. Turn **Camera** and/or **Microphone** on. Camera capture follows actual
-   virtual-camera use; the microphone switch controls capture directly.
+3. Turn **Camera** and/or **Microphone** on. Capture follows actual use:
+   the virtual camera's readers and the cable's recording sessions.
    If Windows asks for firewall access to `av-relay-windows.exe`,
    allow it on the private LAN.
 4. In your call app, select **OBS Virtual Camera** as the camera and
    **CABLE Output (VB-Audio Virtual Cable)** as the microphone. AV Relay sends
    audio to **CABLE Input**, the cable's playback endpoint.
-5. Turn the microphone switch off when finished. The sender stops capture after its normal
-   three-second linger. **Quit** in the tray stops everything immediately.
+5. Leave the switches on. When the call ends, the sender stops capture after
+   its normal three-second linger. **Quit** in the tray stops everything immediately.
 
 Closing settings leaves the tray icon running. Double-click it to reopen;
 right-click for device switches and Quit. Audio defaults only to CABLE Input;
@@ -137,9 +138,9 @@ powershell -ExecutionPolicy Bypass -File client/windows/scripts/autostart.ps1 -D
 
 ## Current limitations
 
-- Microphone demand is manual; automatic capture-endpoint use detection is future work.
-- Camera use detection follows OBS reader handles; apps that keep their capture
-  graph open while hiding video still count as using the camera.
+- Camera use detection follows OBS reader handles, and microphone use the
+  cable's active recording sessions; apps that keep the device open while
+  muted or hiding video still count as using it.
 - Camera name is OBS Virtual Camera; microphone name is the cable's name.
 - No native Media Foundation camera provider or bundled audio driver yet.
 - OBS and AV Relay cannot produce through the same OBS camera at once.

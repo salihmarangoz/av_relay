@@ -42,6 +42,21 @@ instead of concealed.
   flash and beep at the receiver's camera and microphone, read in one
   GStreamer pipeline so they share a clock.
 
+## Windows receiver (review, 2026-10-17)
+
+Fixes for the tray, the camera restart, the playout delay, the window
+flicker, audio clicks, remembered on-demand switches and reconnecting are in
+CHANGELOG `[Unreleased]`. Tested on
+2026-10-18 with a headless Edge reading OBS Virtual Camera, open/close
+cycles against the real sender.
+
+- **Video conversion.** GStreamer decodes to YUY2 for Linux's v4l2loopback,
+  then `vcam::yuy2_to_nv12` converts each frame on the streaming thread.
+  Asking GStreamer for NV12 directly on Windows would save a pass.
+- **Old reports of "A lot of buffers are being dropped".** A 0.3.0 log had
+  17 s of video frames dropped as late right after the camera started.
+  Not reproduced in 14 cycles with this build; watch for it.
+
 ## Tests with real use
 
 - A real call over Wi-Fi (Discord, Firefox, OBS) with the released apps:

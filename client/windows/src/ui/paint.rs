@@ -2,10 +2,14 @@ use super::*;
 impl Ui {
     pub(super) unsafe fn paint(&self) {
         let mut ps: PAINTSTRUCT = std::mem::zeroed();
-        let dc = BeginPaint(self.hwnd, &mut ps);
+        let screen = BeginPaint(self.hwnd, &mut ps);
         let mut rect = RECT::default();
         GetClientRect(self.hwnd, &mut rect);
-        FillRect(dc, &rect, self.bg);
+        buffered(screen, &rect, |dc| self.paint_to(dc, &rect));
+        EndPaint(self.hwnd, &ps);
+    }
+    unsafe fn paint_to(&self, dc: HDC, rect: &RECT) {
+        FillRect(dc, rect, self.bg);
         match self.page {
             Page::Status => {
                 DrawIconEx(
@@ -57,7 +61,6 @@ impl Ui {
             }
             _ => {}
         }
-        EndPaint(self.hwnd, &ps);
     }
     unsafe fn card(&self, dc: HDC, x: i32, y: i32, w: i32, h: i32) {
         let pen = CreatePen(PS_SOLID, 1, rgb(222, 221, 218));
@@ -85,7 +88,9 @@ impl Ui {
         DeleteObject(pen);
     }
     pub(super) unsafe fn draw_item(&self, item: &DRAWITEMSTRUCT) {
-        let dc = item.hDC;
+        buffered(item.hDC, &item.rcItem, |dc| self.draw_item_to(dc, item));
+    }
+    unsafe fn draw_item_to(&self, dc: HDC, item: &DRAWITEMSTRUCT) {
         let rect = item.rcItem;
         let id = item.CtlID as u16;
         let enabled = item.itemState & ODS_DISABLED == 0;
@@ -100,30 +105,14 @@ impl Ui {
             };
             let x = rect.left + self.px(1);
             let y = rect.top + (rect.bottom - rect.top - self.px(22)) / 2;
-            let brush = CreateSolidBrush(if !enabled {
+            let track = if !enabled {
                 rgb(215, 215, 215)
             } else if on {
                 BLUE
             } else {
                 rgb(170, 170, 170)
-            });
-            let old = SelectObject(dc, brush);
-            let old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
-            RoundRect(
-                dc,
-                x,
-                y,
-                x + self.px(40),
-                y + self.px(22),
-                self.px(22),
-                self.px(22),
-            );
-            SelectObject(dc, self.white);
-            let tx = x + self.px(if on { 21 } else { 3 });
-            Ellipse(dc, tx, y + self.px(3), tx + self.px(16), y + self.px(19));
-            SelectObject(dc, old);
-            SelectObject(dc, old_pen);
-            DeleteObject(brush);
+            };
+            draw_switch(dc, x, y, self.px(40), self.px(22), on, track, WHITE);
         } else {
             if item.itemState & ODS_SELECTED != 0 {
                 let brush = CreateSolidBrush(rgb(240, 240, 240));
@@ -169,4 +158,67 @@ impl Ui {
             DrawFocusRect(dc, &rect);
         }
     }
+}
+
+/// GDI draws without antialiasing (jagged at any scale), so the switch is
+/// drawn here: each pixel mixes the colours by how much of it the track
+/// and the knob cover.
+unsafe fn draw_switch(dc: HDC, x: i32, y: i32, w: i32, h: i32, on: bool, track: COLORREF, back: COLORREF) {
+    if w <= 0 || h <= 0 {
+        return;
+    }
+    let r = h as f32 / 2.0;
+    // The knob: 16 of the track's 22 px, 3 px from its end.
+    let knob = h as f32 * 8.0 / 22.0;
+    let knob_x = if on { w as f32 - r } else { r };
+    let channels = |c: COLORREF| [(c & 0xff) as f32, (c >> 8 & 0xff) as f32, (c >> 16 & 0xff) as f32];
+    let (back, track, white) = (channels(back), channels(track), channels(WHITE));
+    let coverage = |distance: f32| (0.5 - distance).clamp(0.0, 1.0);
+    let mut pixels = Vec::with_capacity((w * h) as usize);
+    for py in 0..h {
+        for px in 0..w {
+            let (fx, fy) = (px as f32 + 0.5, py as f32 + 0.5);
+            let pill = (fx - fx.clamp(r, w as f32 - r)).hypot(fy - r) - r;
+            let a = coverage(pill);
+            let b = coverage((fx - knob_x).hypot(fy - r) - knob);
+            let c: [f32; 3] = std::array::from_fn(|i| {
+                let under = back[i] + (track[i] - back[i]) * a;
+                under + (white[i] - under) * b
+            });
+            // BGRX.
+            pixels.push((c[2].round() as u32) | (c[1].round() as u32) << 8 | (c[0].round() as u32) << 16);
+        }
+    }
+    let info = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: w,
+            biHeight: -h,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB,
+            ..std::mem::zeroed()
+        },
+        ..std::mem::zeroed()
+    };
+    SetDIBitsToDevice(dc, x, y, w as u32, h as u32, 0, 0, 0, h as u32, pixels.as_ptr().cast(), &info, DIB_RGB_COLORS);
+}
+
+/// Draws off screen, then copies the result in one go: the screen never
+/// shows a half-drawn window or control (the background without its text).
+unsafe fn buffered(dc: HDC, rect: &RECT, draw: impl FnOnce(HDC)) {
+    let (w, h) = (rect.right - rect.left, rect.bottom - rect.top);
+    if w <= 0 || h <= 0 {
+        return;
+    }
+    let mem = CreateCompatibleDC(dc);
+    let bitmap = CreateCompatibleBitmap(dc, w, h);
+    let old = SelectObject(mem, bitmap);
+    SetViewportOrgEx(mem, -rect.left, -rect.top, ptr::null_mut());
+    draw(mem);
+    SetViewportOrgEx(mem, 0, 0, ptr::null_mut());
+    BitBlt(dc, rect.left, rect.top, w, h, mem, 0, 0, SRCCOPY);
+    SelectObject(mem, old);
+    DeleteObject(bitmap);
+    DeleteDC(mem);
 }

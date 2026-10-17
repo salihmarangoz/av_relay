@@ -732,6 +732,17 @@ fn video_branch(video: VideoFormat, sinks: Arc<Sinks>) -> Result<(Vec<gst::Eleme
     // or depends on the driver. Slice threads only: frame threads would
     // delay every frame.
     let decode = gst::ElementFactory::make("avdec_h264").property_from_str("thread-type", "slice").build()?;
+    // What the sender actually sends (the sink scales it to the camera's
+    // format): a lower resolution here means the sender adapted down.
+    if let Some(pad) = decode.static_pad("src") {
+        pad.connect_notify(Some("caps"), |pad, _| {
+            if let Some(s) = pad.current_caps().as_ref().and_then(|c| c.structure(0)) {
+                if let (Ok(w), Ok(h)) = (s.get::<i32>("width"), s.get::<i32>("height")) {
+                    log::info!("receiving video at {w}x{h}");
+                }
+            }
+        });
+    }
     let convert = gst::ElementFactory::make("videoconvertscale").property("add-borders", true).build()?;
     let caps = gst::Caps::builder("video/x-raw")
         .field("format", "YUY2")

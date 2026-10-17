@@ -56,16 +56,51 @@ fn object_query() -> Result<QueryObject> {
         >(query))
     }
 }
+/// The shared queue's states (shared-memory-queue.h).
+const STARTING: u32 = 1;
+const READY: u32 = 2;
+const STOPPING: u32 = 3;
+const CAMERA_MAPPING: &str = "OBSVirtualCamVideo";
+/// How long a restart waits for readers to let go of the previous mapping.
+const RELEASE_WAIT: Duration = Duration::from_millis(1500);
 // The mapping is owned and used only by the camera thread.
 impl Queue {
     fn new(format: VideoFormat) -> Result<Self> {
+        Self::open(CAMERA_MAPPING, format, RELEASE_WAIT)
+    }
+    /// A reader keeps a stopped producer's mapping alive until it notices
+    /// the stop, which a reader whose graph isn't running never does: the
+    /// camera then couldn't be switched back on. A stopped mapping of the
+    /// same format is taken over; a different one is waited for.
+    fn open(name: &str, format: VideoFormat, wait: Duration) -> Result<Self> {
+        let deadline = Instant::now() + wait;
+        loop {
+            match Self::create(name, format)? {
+                Ok(queue) => return Ok(queue),
+                Err(state) if state != STOPPING || Instant::now() >= deadline => {
+                    if state == STOPPING {
+                        bail!(
+                            "OBS Virtual Camera is still open in another app at a different resolution. Close the camera there, then try again."
+                        );
+                    }
+                    bail!(
+                        "OBS Virtual Camera is already producing video. Stop Virtual Camera in OBS and close other AV Relay instances."
+                    );
+                }
+                Err(_) => thread::sleep(Duration::from_millis(50)),
+            }
+        }
+    }
+    /// The queue, or the state of a mapping that already exists and can't
+    /// be taken over.
+    fn create(name: &str, format: VideoFormat) -> Result<std::result::Result<Self, u32>> {
         let query = object_query()?;
         let pixels = format.width as usize * format.height as usize;
         let bytes = pixels * 3 / 2;
         let stride = align32(bytes + 32);
         let start = align32(std::mem::size_of::<Header>());
         let size = start + stride * 3;
-        let name = crate::wide("OBSVirtualCamVideo");
+        let name = crate::wide(name);
         let handle = unsafe {
             CreateFileMappingW(
                 INVALID_HANDLE_VALUE,
@@ -79,20 +114,34 @@ impl Queue {
         if handle.is_null() {
             return Err(std::io::Error::last_os_error().into());
         }
-        if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-            unsafe {
-                CloseHandle(handle);
-            }
-            bail!(
-                "OBS Virtual Camera is already producing video. Stop Virtual Camera in OBS and close other AV Relay instances."
-            );
-        }
+        let existed = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
         let view = unsafe { MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size) };
         if view.Value.is_null() {
+            let error = std::io::Error::last_os_error();
             unsafe {
                 CloseHandle(handle);
             }
-            return Err(std::io::Error::last_os_error().into());
+            // An existing mapping smaller than this format's.
+            return if existed { Ok(Err(STOPPING)) } else { Err(error.into()) };
+        }
+        let offsets = std::array::from_fn(|i| (start + i * stride) as u32);
+        let interval = 10_000_000 / format.fps as u64;
+        if existed {
+            let header = unsafe { &*view.Value.cast::<Header>() };
+            let state = header.state.load(Ordering::Acquire);
+            // Readers keep the format they read when the queue became ready.
+            let same = header.width == format.width
+                && header.height == format.height
+                && header.interval == interval
+                && header.offsets == offsets;
+            if state != STOPPING || !same {
+                unsafe {
+                    UnmapViewOfFile(view);
+                    CloseHandle(handle);
+                }
+                return Ok(Err(state));
+            }
+            log::info!("taking over the stopped virtual camera mapping");
         }
         let queue = Self {
             handle,
@@ -108,17 +157,17 @@ impl Queue {
                 Header {
                     write_idx: AtomicU32::new(0),
                     read_idx: AtomicU32::new(0),
-                    state: AtomicU32::new(1),
-                    offsets: std::array::from_fn(|i| (start + i * stride) as u32),
+                    state: AtomicU32::new(STARTING),
+                    offsets,
                     kind: 0,
                     width: format.width,
                     height: format.height,
-                    interval: 10_000_000 / format.fps as u64,
+                    interval,
                     reserved: [0; 8],
                 },
             );
         }
-        Ok(queue)
+        Ok(Ok(queue))
     }
     /// OBS readers open this mapping only while their capture graph runs.
     /// Its public object information counts our one handle plus consumers.
@@ -149,7 +198,7 @@ impl Queue {
             ptr::copy_nonoverlapping(frame.as_ptr(), slot.add(32), frame.len());
             header.write_idx.store(index, Ordering::Release);
             header.read_idx.store(index, Ordering::Release);
-            header.state.store(2, Ordering::Release);
+            header.state.store(READY, Ordering::Release);
         }
     }
 }
@@ -158,32 +207,60 @@ impl Drop for Queue {
         unsafe {
             (*self.view.Value.cast::<Header>())
                 .state
-                .store(3, Ordering::Release);
+                .store(STOPPING, Ordering::Release);
             UnmapViewOfFile(self.view);
             CloseHandle(self.handle);
         }
     }
 }
 
+/// Since the last [`VideoFeed::take_stats`].
+#[derive(Debug, Default, Clone, Copy)]
+pub struct CamStats {
+    /// Frames from the sender.
+    pub pushed: u64,
+    /// Of those, frames that came more than 1.5 frame intervals after the
+    /// one before.
+    pub late: u64,
+    /// The longest time between two frames from the sender.
+    pub max_gap: Duration,
+    /// Frames written again because the next one hadn't come.
+    pub repeated: u64,
+    /// Black frames written (no frame from the sender).
+    pub placeholder: u64,
+}
 struct Frame {
     pixels: Vec<u8>,
     received: Option<Instant>,
+    stats: CamStats,
 }
 #[derive(Clone)]
 pub struct VideoFeed {
     frame: Arc<Mutex<Frame>>,
     width: usize,
     height: usize,
+    period: Duration,
 }
 impl VideoFeed {
     pub fn push(&self, yuy2: &[u8]) {
         let mut frame = self.frame.lock().unwrap();
         if yuy2_to_nv12(yuy2, &mut frame.pixels, self.width, self.height) {
-            frame.received = Some(Instant::now());
+            let now = Instant::now();
+            if let Some(gap) = frame.received.map(|t| now - t) {
+                frame.stats.max_gap = frame.stats.max_gap.max(gap);
+                if gap > self.period * 3 / 2 {
+                    frame.stats.late += 1;
+                }
+            }
+            frame.stats.pushed += 1;
+            frame.received = Some(now);
         }
     }
     pub fn clear(&self) {
         self.frame.lock().unwrap().received = None;
+    }
+    pub fn take_stats(&self) -> CamStats {
+        std::mem::take(&mut self.frame.lock().unwrap().stats)
     }
 }
 pub struct Camera {
@@ -202,9 +279,11 @@ impl Camera {
             frame: Arc::new(Mutex::new(Frame {
                 pixels: black(pixels),
                 received: None,
+                stats: CamStats::default(),
             })),
             width: format.width as usize,
             height: format.height as usize,
+            period: Duration::from_secs_f64(1.0 / format.fps as f64),
         };
         let stop = Arc::new(AtomicBool::new(false));
         let in_use = Arc::new(AtomicBool::new(false));
@@ -229,18 +308,21 @@ impl Camera {
                 let start = Instant::now();
                 let period = Duration::from_secs_f64(1.0 / format.fps as f64);
                 let mut next = start;
+                let mut written = None;
                 while !stopped.load(Ordering::Acquire) {
                     used.store(queue.in_use(), Ordering::Release);
                     {
-                        let frame = frame.lock().unwrap();
-                        let image = if frame
+                        let mut frame = frame.lock().unwrap();
+                        let fresh = frame
                             .received
-                            .is_some_and(|t| t.elapsed() < Duration::from_secs(1))
-                        {
-                            &frame.pixels
-                        } else {
-                            &blank
-                        };
+                            .filter(|t| t.elapsed() < Duration::from_secs(1));
+                        if fresh.is_none() {
+                            frame.stats.placeholder += 1;
+                        } else if fresh == written {
+                            frame.stats.repeated += 1;
+                        }
+                        written = fresh;
+                        let image = if fresh.is_some() { &frame.pixels } else { &blank };
                         queue.write(image, start.elapsed().as_nanos() as u64);
                     }
                     next += period;
@@ -321,21 +403,23 @@ mod tests {
         assert_eq!(dst, [10, 30, 50, 70, 40, 60]);
         assert!(!yuy2_to_nv12(&[0; 7], &mut dst, 2, 2));
     }
+    /// A mapping name of the test's own: the real camera may be in use.
+    fn test_name(test: &str) -> String {
+        format!("AVRelayTest-{test}-{}", std::process::id())
+    }
+    const FORMAT: VideoFormat = VideoFormat {
+        width: 16,
+        height: 16,
+        fps: 30,
+    };
     #[test]
-    fn obs_mapping_is_exclusive_and_header_matches() {
-        let format = VideoFormat {
-            width: 16,
-            height: 16,
-            fps: 30,
-        };
-        let Ok(mut queue) = Queue::new(format) else {
-            return;
-        }; // OBS can be running on a developer's desktop.
-        assert!(Queue::new(format).is_err());
+    fn mapping_is_exclusive_and_header_matches() {
+        let name = test_name("exclusive");
+        let mut queue = Queue::open(&name, FORMAT, Duration::ZERO).unwrap();
+        let error = Queue::open(&name, FORMAT, Duration::ZERO).err().unwrap();
+        assert!(error.to_string().contains("already producing"), "{error}");
         assert!(!queue.in_use());
-        let consumer = unsafe {
-            OpenFileMappingW(FILE_MAP_READ, 0, crate::wide("OBSVirtualCamVideo").as_ptr())
-        };
+        let consumer = unsafe { OpenFileMappingW(FILE_MAP_READ, 0, crate::wide(&name).as_ptr()) };
         assert!(!consumer.is_null());
         assert!(queue.in_use());
         unsafe {
@@ -345,7 +429,7 @@ mod tests {
         queue.write(&black(256), 123);
         unsafe {
             let header = &*queue.view.Value.cast::<Header>();
-            assert_eq!(header.state.load(Ordering::Acquire), 2);
+            assert_eq!(header.state.load(Ordering::Acquire), READY);
             assert_eq!(header.interval, 333333);
             let slot = queue
                 .view
@@ -355,5 +439,37 @@ mod tests {
             assert_eq!(ptr::read_unaligned(slot.cast::<u64>()), 123);
             assert_eq!(*slot.add(32), 16);
         }
+    }
+    /// A reader that never noticed the stop keeps the old mapping: the
+    /// camera must still come back on.
+    #[test]
+    fn restarts_while_a_reader_holds_the_stopped_mapping() {
+        let name = test_name("restart");
+        let wide = crate::wide(&name);
+        let queue = Queue::open(&name, FORMAT, Duration::ZERO).unwrap();
+        let reader = unsafe { OpenFileMappingW(FILE_MAP_READ, 0, wide.as_ptr()) };
+        assert!(!reader.is_null());
+        drop(queue);
+        let mut queue = Queue::open(&name, FORMAT, Duration::ZERO).unwrap();
+        assert!(queue.in_use(), "the reader's handle is on the same mapping");
+        queue.write(&black(256), 1);
+        let view = unsafe { MapViewOfFile(reader, FILE_MAP_READ, 0, 0, 0) };
+        assert!(!view.Value.is_null());
+        unsafe {
+            let header = &*view.Value.cast::<Header>();
+            assert_eq!(header.state.load(Ordering::Acquire), READY);
+            assert_eq!((header.width, header.height), (16, 16));
+            UnmapViewOfFile(view);
+        }
+        // A different format can't be taken over while the reader holds on.
+        drop(queue);
+        let bigger = VideoFormat { width: 32, ..FORMAT };
+        let error = Queue::open(&name, bigger, Duration::from_millis(100)).err().unwrap();
+        assert!(error.to_string().contains("still open"), "{error}");
+        // Once it lets go, the new format starts at once.
+        unsafe {
+            CloseHandle(reader);
+        }
+        Queue::open(&name, bigger, Duration::ZERO).unwrap();
     }
 }

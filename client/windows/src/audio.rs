@@ -19,12 +19,38 @@ struct Buffer {
     last: Instant,
     position: f64,
     primed: bool,
+    /// Times the queue ran dry while playing.
+    underruns: u64,
+}
+impl Buffer {
+    fn new() -> Self {
+        Self {
+            samples: VecDeque::with_capacity(MAX_QUEUE),
+            last: Instant::now(),
+            position: 0.0,
+            primed: false,
+            underruns: 0,
+        }
+    }
+}
+/// Since the last [`AudioFeed::take_stats`].
+#[derive(Debug, Default, Clone, Copy)]
+pub struct MicStats {
+    pub underruns: u64,
+    pub queue: Duration,
 }
 #[derive(Clone)]
-pub struct AudioFeed(Arc<Mutex<Buffer>>);
+pub struct AudioFeed {
+    buffer: Arc<Mutex<Buffer>>,
+}
 impl AudioFeed {
+    fn new() -> Self {
+        Self {
+            buffer: Arc::new(Mutex::new(Buffer::new())),
+        }
+    }
     pub fn push(&self, samples: &[f32]) {
-        let mut b = self.0.lock().unwrap();
+        let mut b = self.buffer.lock().unwrap();
         if b.last.elapsed() > Duration::from_millis(500) {
             b.samples.clear();
             b.primed = false;
@@ -37,8 +63,15 @@ impl AudioFeed {
         b.samples
             .extend(samples.iter().rev().take(MAX_QUEUE).rev().copied());
     }
+    pub fn take_stats(&self) -> MicStats {
+        let mut b = self.buffer.lock().unwrap();
+        MicStats {
+            underruns: std::mem::take(&mut b.underruns),
+            queue: Duration::from_secs_f64(b.samples.len() as f64 / RATE as f64),
+        }
+    }
     pub fn clear(&self) {
-        let mut b = self.0.lock().unwrap();
+        let mut b = self.buffer.lock().unwrap();
         b.samples.clear();
         b.primed = false;
         b.position = 0.0;
@@ -48,6 +81,7 @@ pub struct AudioOutput {
     pub feed: AudioFeed,
     pub name: String,
     pub failed: Arc<AtomicBool>,
+    used: crate::micuse::MicUse,
     _stream: cpal::Stream,
 }
 pub fn devices() -> Result<Vec<String>> {
@@ -57,6 +91,10 @@ pub fn devices() -> Result<Vec<String>> {
         .collect())
 }
 impl AudioOutput {
+    /// Whether an app records from the cable's other end.
+    pub fn in_use(&self) -> bool {
+        self.used.in_use()
+    }
     pub fn start(selected: Option<&str>, error: impl Fn(String) + Send + 'static) -> Result<Self> {
         let device = cpal::default_host().output_devices()?.find(|d| d.name().is_ok_and(|name| match selected {
             Some(selected) => name == selected,
@@ -65,15 +103,10 @@ impl AudioOutput {
         let name = device.name()?;
         // Use the device's native mix format, resampling our mono 48 kHz input.
         let config = device.default_output_config()?;
-        let feed = AudioFeed(Arc::new(Mutex::new(Buffer {
-            samples: VecDeque::with_capacity(MAX_QUEUE),
-            last: Instant::now(),
-            position: 0.0,
-            primed: false,
-        })));
+        let feed = AudioFeed::new();
         let channels = config.channels() as usize;
         let rate = config.sample_rate().0;
-        let queue = feed.0.clone();
+        let queue = feed.clone();
         let failed = Arc::new(AtomicBool::new(false));
         let failed_callback = failed.clone();
         let error = move |err| {
@@ -104,6 +137,7 @@ impl AudioOutput {
         stream.play()?;
         Ok(Self {
             feed,
+            used: crate::micuse::MicUse::start(&name),
             name,
             failed,
             _stream: stream,
@@ -114,10 +148,12 @@ fn fill<T: cpal::Sample + cpal::FromSample<f32>>(
     out: &mut [T],
     channels: usize,
     rate: u32,
-    queue: &Mutex<Buffer>,
+    feed: &AudioFeed,
 ) {
     out.fill(T::from_sample(0.0));
-    let Ok(mut b) = queue.try_lock() else { return };
+    // A push holds the lock only to copy one packet's samples: waiting for
+    // it beats playing the whole period as silence (an audible click).
+    let mut b = feed.buffer.lock().unwrap_or_else(|e| e.into_inner());
     if b.last.elapsed() > Duration::from_millis(500) {
         b.samples.clear();
         b.primed = false;
@@ -138,6 +174,7 @@ fn fill<T: cpal::Sample + cpal::FromSample<f32>>(
     for frame in out.chunks_mut(channels) {
         if b.samples.len() < 2 {
             b.primed = false;
+            b.underruns += 1;
             break;
         }
         let sample = b.samples[0] + (b.samples[1] - b.samples[0]) * b.position as f32;
@@ -155,19 +192,14 @@ mod tests {
     use super::*;
     #[test]
     fn cable_buffer_is_bounded_and_silent_after_clear() {
-        let feed = AudioFeed(Arc::new(Mutex::new(Buffer {
-            samples: VecDeque::new(),
-            last: Instant::now(),
-            position: 0.0,
-            primed: false,
-        })));
+        let feed = AudioFeed::new();
         feed.push(&vec![0.25; RATE as usize]);
-        assert_eq!(feed.0.lock().unwrap().samples.len(), MAX_QUEUE);
+        assert_eq!(feed.buffer.lock().unwrap().samples.len(), MAX_QUEUE);
         let mut out = [0.0; 960];
-        fill(&mut out, 2, RATE, &feed.0);
+        fill(&mut out, 2, RATE, &feed);
         assert!(out.iter().all(|s| *s == 0.25));
         feed.clear();
-        fill(&mut out, 2, RATE, &feed.0);
+        fill(&mut out, 2, RATE, &feed);
         assert!(out.iter().all(|s| *s == 0.0));
     }
 }

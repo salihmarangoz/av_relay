@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use crate::{
-    audio::{AudioFeed, AudioOutput},
+    audio::{AudioFeed, AudioOutput, MicStats},
     crypto::StaticKey,
     discovery,
-    media::{MediaEvent, Receiver, Sinks, delay::PlayoutDelay},
+    media::{InboundStats, MediaEvent, Receiver, Sinks, delay::PlayoutDelay},
     proto::{
         self, ClientMsg, ServerMsg,
         pairing::{self, ClientInfo},
         session,
     },
     store::{PairedSender, Settings, Store},
-    vcam::{Camera, VideoFeed},
+    vcam::{CamStats, Camera, VideoFeed},
 };
 use anyhow::{Context, Result, bail};
 use std::{
@@ -23,6 +23,8 @@ use tokio::{
     sync::mpsc,
     time::{interval, timeout},
 };
+/// How often a session in use logs its `stats:` line.
+const STATS_EVERY: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 pub enum Command {
@@ -130,8 +132,44 @@ impl Core {
                 .video
                 .as_ref()
                 .is_some_and(|c| c.in_use.load(std::sync::atomic::Ordering::Acquire)),
-            audio: self.audio.is_some(),
+            audio: self.audio.as_ref().is_some_and(|a| a.in_use()),
         }
+    }
+    /// What the switches show: the user's choice, kept across launches.
+    fn switches(&self) -> Event {
+        Event::Demand {
+            video: self.settings.camera,
+            audio: self.settings.microphone,
+        }
+    }
+    /// Starts or stops the camera and microphone outputs to match their
+    /// switches. They stay while the sender is away, and go while AV Relay
+    /// is off or has no sender.
+    fn sync_outputs(&mut self) -> Result<()> {
+        let active = self.enabled && self.sender.is_some();
+        if !(active && self.settings.camera) {
+            self.video = None;
+        }
+        if !(active && self.settings.microphone) {
+            self.audio = None;
+        }
+        let mut result = Ok(());
+        if active && self.settings.camera && self.video.is_none() {
+            result = if crate::vcam::installed() {
+                Camera::start(self.settings.video).map(|c| self.video = Some(c))
+            } else {
+                Err(anyhow::anyhow!("OBS Virtual Camera is not registered. Install OBS Studio, or run its virtualcam-install.bat as administrator."))
+            };
+        }
+        if active && self.settings.microphone && self.audio.is_none() {
+            let events = self.events.clone();
+            let started = AudioOutput::start(self.settings.audio_device.as_deref(), move |message| {
+                let _ = events.send(Event::Problem(message));
+            })
+            .map(|a| self.audio = Some(a));
+            result = result.and(started);
+        }
+        result
     }
     fn clear(&self) {
         if let Some(v) = &self.video {
@@ -143,6 +181,10 @@ impl Core {
     }
     async fn run(mut self) -> Result<()> {
         let mut backoff = 1u64;
+        if let Err(e) = self.sync_outputs() {
+            self.problem(format!("{e:#}"));
+        }
+        self.emit(self.switches());
         while !self.quitting {
             if !self.enabled || self.sender.is_none() {
                 self.emit(Event::Connection {
@@ -173,11 +215,12 @@ impl Core {
             };
             let result = match result {
                 Ok((stream, address, port)) => {
+                    // It answered: when this session ends (the sender quit or
+                    // restarted), try again at once rather than after the
+                    // backoff the attempts before it built up.
+                    backoff = 1;
                     match self.session(stream, &sender).await {
-                        Ok(()) => {
-                            backoff = 1;
-                            Ok(())
-                        }
+                        Ok(()) => Ok(()),
                         Err(e) => {
                             // Only authenticated sessions may update the saved address.
                             log::debug!("session at {address}:{port}: {e:#}");
@@ -196,6 +239,7 @@ impl Core {
                 break;
             }
             if let Err(e) = result {
+                log::info!("connection to {}: {e:#}", sender.name);
                 if matches!(
                     e.downcast_ref::<session::SessionError>(),
                     Some(session::SessionError::NotPaired | session::SessionError::AuthFailed)
@@ -204,10 +248,7 @@ impl Core {
                     self.video = None;
                     self.audio = None;
                     self.emit(Event::Enabled(false));
-                    self.emit(Event::Demand {
-                        video: false,
-                        audio: false,
-                    });
+                    self.emit(self.switches());
                     self.problem(format!("{e:#}"));
                 }
                 if e.downcast_ref::<SenderBye>()
@@ -224,7 +265,10 @@ impl Core {
                 _=tokio::time::sleep(Duration::from_secs(backoff)) => {},
                 command=self.commands.recv() => {if let Some(c)=command {self.command(c).await;} else {break;}}
             }
-            backoff = (backoff * 2).min(30);
+            // While the outputs are held, a call is likely waiting on the
+            // sender: retry more often (an attempt is one LAN connect).
+            let cap = if self.video.is_some() || self.audio.is_some() { 3 } else { 30 };
+            backoff = (backoff * 2).min(cap);
         }
         self.clear();
         Ok(())
@@ -249,17 +293,18 @@ impl Core {
                     self.store.save_paired(&sender)?; self.sender=Some(sender); self.enabled=true;self.settings.enabled=true;self.store.save_settings(&self.settings)?;
                     self.emit(Event::Paired(paired.name));
                 },
-                Command::Video(enabled) => {
-                    if enabled && self.video.is_none() {
-                        if !crate::vcam::installed() {bail!("OBS Virtual Camera is not registered. Install OBS Studio, or run its virtualcam-install.bat as administrator.");}
-                        self.video=Some(Camera::start(self.settings.video)?);
-                    } else if !enabled {self.video=None;}
+                Command::Video(on) => {
+                    self.settings.camera=on;
+                    let started=self.sync_outputs();
+                    // A switch that can't come on goes back off.
+                    if started.is_err() && self.video.is_none() {self.settings.camera=false;}
+                    self.store.save_settings(&self.settings)?; started?;
                 },
-                Command::Audio(enabled) => {
-                    if enabled && self.audio.is_none() {
-                        let events=self.events.clone();
-                        self.audio=Some(AudioOutput::start(self.settings.audio_device.as_deref(),move |message| {let _=events.send(Event::Problem(message));})?);
-                    } else if !enabled {self.audio=None;}
+                Command::Audio(on) => {
+                    self.settings.microphone=on;
+                    let started=self.sync_outputs();
+                    if started.is_err() && self.audio.is_none() {self.settings.microphone=false;}
+                    self.store.save_settings(&self.settings)?; started?;
                 },
                 Command::Resolution(format) => {
                     if !crate::store::VIDEO_PRESETS.iter().any(|(_,preset)|*preset==format) {bail!("Unsupported camera resolution");}
@@ -270,17 +315,15 @@ impl Core {
                 Command::AudioDevice(name) => {self.audio=None; self.settings.audio_device=name; self.store.save_settings(&self.settings)?;},
                 Command::StartMinimized(on) => {self.settings.start_minimized=on;self.store.save_settings(&self.settings)?;},
             }
-            Ok(())
+            // Enable, pairing, forgetting, a new resolution or cable.
+            self.sync_outputs()
         }.await;
         if let Err(e) = result {
             self.problem(format!("{e:#}"));
         }
         self.emit(Event::Enabled(self.enabled));
         self.emit(Event::Settings(self.settings.clone()));
-        self.emit(Event::Demand {
-            video: self.video.is_some(),
-            audio: self.audio.is_some(),
-        });
+        self.emit(self.switches());
     }
     async fn session(&mut self, stream: TcpStream, sender: &PairedSender) -> Result<()> {
         let local: IpAddr = stream.local_addr()?.ip();
@@ -362,6 +405,9 @@ impl Core {
         let mut delay = PlayoutDelay::new(Duration::from_millis(300));
         let mut failed: Option<Instant> = None;
         let mut last_demand = self.demand();
+        let mut stats = interval(STATS_EVERY);
+        let mut retried = Instant::now();
+        let mut prev_inbound = Vec::new();
         loop {
             tokio::select! {
                 message=control_rx.recv() => {
@@ -373,10 +419,12 @@ impl Core {
                             log::info!("Sender capture: camera {:?}, microphone {:?}",video.state,audio.state);
                             if let Some(error)=&video.error {self.problem(format!("Sender camera: {error}"));}
                             if let Some(error)=&audio.error {self.problem(format!("Sender microphone: {error}"));}
+                            // Without the sender's camera, black rather than the last frame.
+                            if video.state!=proto::CaptureState::On && let Some(v)=&self.video {v.feed.clear();}
                             self.emit(Event::Capture{video,audio});
                         },
                         ServerMsg::Bye{reason} => {
-                            if reason=="unpaired" {self.store.forget()?;self.sender=None;self.video=None;self.audio=None;self.emit(Event::Demand{video:false,audio:false});}
+                            if reason=="unpaired" {self.store.forget()?;self.sender=None;self.video=None;self.audio=None;self.emit(self.switches());}
                             return Err(SenderBye(reason).into());
                         },
                         ServerMsg::Error{code,message} => bail!("{}",message.unwrap_or(code)),
@@ -413,9 +461,14 @@ impl Core {
                 _=sync.tick() => {
                     if self.audio.as_ref().is_some_and(|a|a.failed.load(std::sync::atomic::Ordering::Acquire)) {
                         self.audio=None;
-                        *audio_feed.lock().unwrap()=None;
-                        self.emit(Event::Demand{video:self.video.is_some(),audio:false});
-                        writer.send(&self.demand()).await?;
+                    }
+                    // An output that failed (the cable went away) comes back
+                    // when it can, the switch staying on.
+                    if (self.video.is_none()&&self.settings.camera || self.audio.is_none()&&self.settings.microphone) && retried.elapsed()>Duration::from_secs(5) {
+                        retried=Instant::now();
+                        if let Err(e)=self.sync_outputs() {log::warn!("restarting an output: {e:#}");}
+                        *video_feed.lock().unwrap()=self.video.as_ref().map(|v|v.feed.clone());
+                        *audio_feed.lock().unwrap()=self.audio.as_ref().map(|a|a.feed.clone());
                     }
                     let demand=self.demand();
                     if demand!=last_demand {
@@ -425,11 +478,58 @@ impl Core {
                     }
                     let (audio,video)=media.spreads();
                     let spreads:Vec<f64>=audio.into_iter().chain(video).collect();
-                    if let Some(d)=delay.update(&spreads,Duration::from_millis(250)) {media.set_delay(d,Duration::from_millis(40));}
+                    let before=delay.current();
+                    if let Some(d)=delay.update(&spreads,Duration::from_millis(250)) {
+                        if d>before {log::info!("playout delay {} ms (network spread: audio {:?}, video {:?})",d.as_millis(),audio,video);}
+                        media.set_delay(d,Duration::from_millis(40));
+                    }
+                },
+                _=stats.tick() => {
+                    // Taking them resets the counts, also while nothing is in use.
+                    let cam=self.video.as_ref().map(|v|v.feed.take_stats());
+                    let mic=self.audio.as_ref().map(|a|a.feed.take_stats());
+                    let inbound=media.stats();
+                    if matches!(last_demand,ClientMsg::Media{video,audio} if video||audio) {
+                        log::info!("{}",stats_line(&inbound,&prev_inbound,cam,mic,delay.current()));
+                    }
+                    prev_inbound=inbound;
                 },
             }
         }
     }
+}
+fn stats_line(now: &[InboundStats], prev: &[InboundStats], cam: Option<CamStats>, mic: Option<MicStats>, delay: Duration) -> String {
+    let mut line = format!("stats: delay {} ms |", delay.as_millis());
+    for s in now {
+        let p = prev.iter().find(|p| p.ssrc == s.ssrc).cloned().unwrap_or_default();
+        line += &format!(
+            " {} rx {} lost {} jitter {:.1} ms nack {} pli {} jb-lost {} jb-late {} rtx {}/{} |",
+            if s.video { "video" } else { "audio" },
+            s.packets_received.saturating_sub(p.packets_received),
+            s.packets_lost - p.packets_lost,
+            s.jitter_ms,
+            s.nacks.saturating_sub(p.nacks),
+            s.plis.saturating_sub(p.plis),
+            s.jb_lost.saturating_sub(p.jb_lost),
+            s.jb_late.saturating_sub(p.jb_late),
+            s.rtx_ok.saturating_sub(p.rtx_ok),
+            s.rtx_requests.saturating_sub(p.rtx_requests),
+        );
+    }
+    if let Some(c) = cam {
+        line += &format!(
+            " camera {} frames, {} late, max gap {} ms, {} repeated, {} black |",
+            c.pushed,
+            c.late,
+            c.max_gap.as_millis(),
+            c.repeated,
+            c.placeholder
+        );
+    }
+    if let Some(m) = mic {
+        line += &format!(" mic {} underruns, queue {} ms", m.underruns, m.queue.as_millis());
+    }
+    line
 }
 async fn connect_sender(sender: &PairedSender) -> Result<(TcpStream, String, u16)> {
     if let Ok(Ok(stream)) = timeout(

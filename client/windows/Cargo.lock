@@ -161,6 +161,7 @@ dependencies = [
  "snow",
  "thiserror 2.0.21",
  "tokio",
+ "windows",
  "windows-sys 0.61.2",
  "zeroize",
 ]

@@ -9,7 +9,7 @@ publish = false
 [features]
 default = ["media"]
 media = ["dep:gstreamer", "dep:gstreamer-webrtc", "dep:gstreamer-sdp", "dep:gstreamer-app", "dep:gstreamer-rtp", "windows-audio"]
-windows-audio = ["dep:cpal"]
+windows-audio = ["dep:cpal", "dep:windows"]
 
 [dependencies]
 anyhow = "1"
@@ -33,6 +33,11 @@ gstreamer-sdp = { version = "0.25", optional = true }
 gstreamer-app = { version = "0.25", optional = true }
 gstreamer-rtp = { version = "0.25", features = ["v1_20"], optional = true }
 cpal = { version = "0.16", optional = true }
+# The version cpal already uses; for audio sessions on the cable (micuse).
+windows = { version = "0.54", optional = true, features = [
+  "Win32_Devices_FunctionDiscovery", "Win32_Media_Audio", "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage", "Win32_UI_Shell_PropertiesSystem",
+] }
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation", "Win32_Security", "Win32_Security_Cryptography",
   "Win32_System_Memory", "Win32_System_LibraryLoader", "Win32_System_Registry",

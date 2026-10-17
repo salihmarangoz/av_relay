@@ -50,6 +50,10 @@ pub struct Settings {
     pub audio_device: Option<String>,
     pub enabled: bool,
     pub start_minimized: bool,
+    /// The Camera and Microphone switches: the device is available, and
+    /// the sender captures while an app uses it.
+    pub camera: bool,
+    pub microphone: bool,
 }
 
 /// Display names and wire formats for the resolution menu. Add future
@@ -80,6 +84,8 @@ impl Default for Settings {
             audio_device: None,
             enabled: true,
             start_minimized: true,
+            camera: false,
+            microphone: false,
         }
     }
 }

@@ -10,11 +10,44 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Windows: a `stats:` line every 10 seconds in `av-relay.log` while the
+  camera or microphone is in use (packets, losses, retransmissions, camera
+  frames and gaps, microphone underruns), like the Ubuntu receiver's.
+- Receivers: the log names the resolution the sender actually sends
+  (`receiving video at 1920x1080`), apart from the camera's output size.
+
+### Changed
+
+- Windows: the Camera and Microphone switches are remembered across launches
+  and no longer turn off after a call. The microphone is on demand like the
+  camera: the sender captures only while an app records from CABLE Output.
+- Windows: smooth (antialiased) switches in the settings window.
+
 ### Fixed
 
 - Sender: when the camera starts again while the microphone stays on, video
   comes back at full quality at once, instead of 320x180 at 10–15 fps for
   about 20 seconds.
+- Windows: the settings window no longer flickers when the receiver's state
+  changes; controls are only touched when their text or state changes.
+- Windows: after the sender restarts or quits during a call, the receiver
+  reconnects within about 3 seconds of it coming back, instead of after a
+  backoff of up to 30 seconds.
+- Windows: the microphone no longer drops a whole audio period to silence
+  (a click) when a packet arrives while the cable endpoint asks for audio.
+- Windows: double-clicking the tray icon opens settings without also opening
+  the menu, and the settings window no longer stays half drawn after the
+  tray menu or the Forget confirmation.
+- Windows: window and tray icons load at their own size instead of a scaled
+  copy of the first size loaded.
+- Windows: the Camera switch turns back on while a call app still holds the
+  previous virtual camera; it no longer fails with "already producing video".
+- Windows: without the sender's camera, the virtual camera shows black at once
+  rather than the last frame for a second.
+- Receivers: a camera or microphone restarted on demand no longer raises the
+  playout delay; its start-up burst is ignored like a new stream's.
 
 ## [0.3.0] - 2026-10-17
 

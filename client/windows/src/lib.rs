@@ -17,6 +17,8 @@ pub mod icons;
 #[cfg(feature = "media")]
 #[path = "../../linux/src/media/mod.rs"]
 pub mod media;
+#[cfg(feature = "windows-audio")]
+pub mod micuse;
 pub mod store;
 #[cfg(feature = "media")]
 pub mod ui;

@@ -517,7 +517,7 @@ impl Ui {
             ICON_SMALL as usize,
             icons::app(GetSystemMetrics(SM_CXSMICON)) as isize,
         );
-        SetTimer(self.hwnd, 1, 200, None);
+        SetTimer(self.hwnd, EVENT_TIMER, 200, None);
         self.show_page(if self.sender.is_some() {
             Page::Status
         } else {

@@ -13,7 +13,13 @@ use crate::{
     wide,
 };
 use anyhow::{Result, bail};
-use std::{cell::RefCell, collections::HashMap, mem::size_of, ptr, sync::mpsc::TryRecvError};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    mem::size_of,
+    ptr,
+    sync::mpsc::TryRecvError,
+};
 use windows_sys::Win32::{
     Foundation::*,
     Graphics::Gdi::*,
@@ -21,12 +27,15 @@ use windows_sys::Win32::{
     UI::{
         Controls::*,
         HiDpi::GetDpiForSystem,
-        Input::KeyboardAndMouse::{EnableWindow, SetFocus},
+        Input::KeyboardAndMouse::{EnableWindow, GetDoubleClickTime, IsWindowEnabled, SetFocus},
         Shell::*,
         WindowsAndMessaging::*,
     },
 };
 const TRAY: u32 = WM_APP + 1;
+const EVENT_TIMER: usize = 1;
+/// A single click on the tray icon opens the menu once it can't be a double click.
+const MENU_TIMER: usize = 2;
 const QUIT_MESSAGE: u32 = WM_APP + 12;
 const PAIR: u16 = 101;
 const SCAN: u16 = 102;
@@ -132,6 +141,8 @@ struct Ui {
     taskbar_created: u32,
     last_tip: String,
     last_icon: Option<(State, bool)>,
+    /// The tray's double click is followed by a button-up: not a click.
+    tray_double: bool,
 }
 impl Ui {
     fn px(&self, n: i32) -> i32 {
@@ -144,12 +155,8 @@ impl Ui {
         if !self.enabled {
             State::Disabled
         } else if self.connected {
-            if self
-                .video_state
-                .as_ref()
-                .is_some_and(|s| s.state == CaptureState::On)
-                || self.audio_on
-            {
+            let on = |s: &Option<DeviceState>| s.as_ref().is_some_and(|s| s.state == CaptureState::On);
+            if on(&self.video_state) || on(&self.audio_state) {
                 State::Live
             } else {
                 State::On
@@ -258,6 +265,7 @@ pub fn run(store: &Store, commands: Commands, events: Events, minimized: bool) -
             taskbar_created: RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()),
             last_tip: String::new(),
             last_icon: None,
+            tray_double: false,
         }));
         let class = wide("AVRelayWindowsReceiver");
         let instance = GetModuleHandleW(ptr::null());
@@ -276,7 +284,8 @@ pub fn run(store: &Store, commands: Commands, events: Events, minimized: bool) -
             0,
             class.as_ptr(),
             wide("AV Relay").as_ptr(),
-            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+            // Clip the controls: painting the window mustn't wipe them first.
+            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             536 * dpi / 96,
@@ -308,6 +317,11 @@ pub fn run(store: &Store, commands: Commands, events: Events, minimized: bool) -
         Ok(())
     }
 }
+thread_local! {
+    /// A paint or draw message came while the Ui was borrowed and went
+    /// unanswered: redraw everything on the next tick.
+    static MISSED_PAINT: Cell<bool> = const { Cell::new(false) };
+}
 unsafe extern "system" fn window_proc(
     hwnd: HWND,
     message: u32,
@@ -319,82 +333,154 @@ unsafe extern "system" fn window_proc(
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
     }
     let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut RefCell<Ui>;
-    if !state.is_null() {
-        let Ok(mut ui) = (*state).try_borrow_mut() else {
-            return DefWindowProcW(hwnd, message, wparam, lparam);
-        };
-        if message == ui.taskbar_created {
-            ui.tray_available = Shell_NotifyIconW(NIM_ADD, &ui.notice) != 0;
+    if state.is_null() {
+        return DefWindowProcW(hwnd, message, wparam, lparam);
+    }
+    let cell = &*state;
+    // Modal loops (the tray menu, a message box) dispatch this window's
+    // paint and draw messages themselves, so they must run without the
+    // borrow: otherwise those messages fall through to the defaults below
+    // and leave the window half drawn.
+    match message {
+        TRAY => {
+            match lparam as u32 {
+                WM_LBUTTONUP => {
+                    if let Ok(mut ui) = cell.try_borrow_mut()
+                        && !std::mem::take(&mut ui.tray_double)
+                    {
+                        SetTimer(hwnd, MENU_TIMER, GetDoubleClickTime(), None);
+                    }
+                }
+                WM_LBUTTONDBLCLK => {
+                    KillTimer(hwnd, MENU_TIMER);
+                    if let Ok(mut ui) = cell.try_borrow_mut() {
+                        ui.tray_double = true;
+                        ui.command(SHOW, 0);
+                    }
+                }
+                WM_RBUTTONUP => {
+                    KillTimer(hwnd, MENU_TIMER);
+                    tray_menu(hwnd, cell);
+                }
+                _ => {}
+            }
             return 0;
         }
-        match message {
-            WM_COMMAND => {
-                ui.command((wparam & 0xffff) as u16, ((wparam >> 16) & 0xffff) as u16);
-                return 0;
-            }
-            WM_TIMER => {
-                ui.tick();
-                return 0;
-            }
-            WM_PAINT => {
-                ui.paint();
-                return 0;
-            }
-            WM_ERASEBKGND => return 1,
-            WM_CTLCOLORSTATIC => {
-                if let Some(&(colour, brush)) = ui.colours.get(&lparam) {
-                    let dc = wparam as HDC;
-                    SetTextColor(dc, colour);
-                    SetBkMode(dc, TRANSPARENT as i32);
-                    return brush as isize;
-                }
-            }
-            WM_DRAWITEM => {
-                ui.draw_item(&*(lparam as *const DRAWITEMSTRUCT));
-                return 1;
-            }
-            WM_SETTINGCHANGE => {
-                ui.update_tray(true);
-                return 0;
-            }
-            TRAY => {
-                match lparam as u32 {
-                    WM_LBUTTONUP | WM_RBUTTONUP => ui.menu(),
-                    WM_LBUTTONDBLCLK => ui.command(SHOW, 1),
-                    _ => {}
-                }
-                return 0;
-            }
-            QUIT_MESSAGE => {
-                ui.command(QUIT, 1);
-                return 0;
-            }
-            WM_CLOSE => {
-                ShowWindow(
-                    hwnd,
-                    if ui.tray_available {
-                        SW_HIDE
-                    } else {
-                        SW_MINIMIZE
-                    },
-                );
-                return 0;
-            }
-            WM_DESTROY => {
-                KillTimer(hwnd, 1);
-                Shell_NotifyIconW(NIM_DELETE, &ui.notice);
-                ui.send(Command::Quit);
-                PostQuitMessage(0);
-                return 0;
-            }
-            WM_ENDSESSION if wparam != 0 => {
-                ui.send(Command::Quit);
-                return 0;
-            }
-            _ => {}
+        WM_TIMER if wparam == MENU_TIMER => {
+            KillTimer(hwnd, MENU_TIMER);
+            tray_menu(hwnd, cell);
+            return 0;
         }
+        WM_COMMAND if (wparam & 0xffff) as u16 == FORGET => {
+            if MessageBoxW(
+                hwnd,
+                wide("Forget this sender? You will need a new code to pair again.").as_ptr(),
+                wide("AV Relay").as_ptr(),
+                MB_YESNO | MB_ICONQUESTION,
+            ) != IDYES
+            {
+                return 0;
+            }
+        }
+        _ => {}
+    }
+    let Ok(mut ui) = cell.try_borrow_mut() else {
+        if matches!(
+            message,
+            WM_PAINT | WM_ERASEBKGND | WM_DRAWITEM | WM_CTLCOLORSTATIC
+        ) {
+            MISSED_PAINT.set(true);
+        }
+        return DefWindowProcW(hwnd, message, wparam, lparam);
+    };
+    if message == ui.taskbar_created {
+        ui.tray_available = Shell_NotifyIconW(NIM_ADD, &ui.notice) != 0;
+        return 0;
+    }
+    match message {
+        WM_COMMAND => {
+            ui.command((wparam & 0xffff) as u16, ((wparam >> 16) & 0xffff) as u16);
+            return 0;
+        }
+        WM_TIMER => {
+            ui.tick();
+            return 0;
+        }
+        WM_PAINT => {
+            ui.paint();
+            return 0;
+        }
+        WM_ERASEBKGND => return 1,
+        WM_CTLCOLORSTATIC => {
+            if let Some(&(colour, brush)) = ui.colours.get(&lparam) {
+                let dc = wparam as HDC;
+                SetTextColor(dc, colour);
+                SetBkMode(dc, TRANSPARENT as i32);
+                return brush as isize;
+            }
+        }
+        WM_DRAWITEM => {
+            ui.draw_item(&*(lparam as *const DRAWITEMSTRUCT));
+            return 1;
+        }
+        WM_SETTINGCHANGE => {
+            ui.update_tray(true);
+            return 0;
+        }
+        QUIT_MESSAGE => {
+            ui.command(QUIT, 0);
+            return 0;
+        }
+        WM_CLOSE => {
+            ShowWindow(
+                hwnd,
+                if ui.tray_available {
+                    SW_HIDE
+                } else {
+                    SW_MINIMIZE
+                },
+            );
+            return 0;
+        }
+        WM_DESTROY => {
+            KillTimer(hwnd, EVENT_TIMER);
+            KillTimer(hwnd, MENU_TIMER);
+            Shell_NotifyIconW(NIM_DELETE, &ui.notice);
+            ui.send(Command::Quit);
+            PostQuitMessage(0);
+            return 0;
+        }
+        WM_ENDSESSION if wparam != 0 => {
+            ui.send(Command::Quit);
+            return 0;
+        }
+        _ => {}
     }
     DefWindowProcW(hwnd, message, wparam, lparam)
+}
+/// Shows the tray menu and carries out the choice as a menu command.
+unsafe fn tray_menu(hwnd: HWND, cell: &RefCell<Ui>) {
+    let Ok(ui) = cell.try_borrow() else { return };
+    let menu = ui.menu();
+    drop(ui);
+    let mut point = POINT { x: 0, y: 0 };
+    GetCursorPos(&mut point);
+    // Without this the menu stays open after a click elsewhere.
+    SetForegroundWindow(hwnd);
+    let choice = TrackPopupMenu(
+        menu,
+        TPM_RETURNCMD | TPM_RIGHTBUTTON,
+        point.x,
+        point.y,
+        0,
+        hwnd,
+        ptr::null(),
+    );
+    DestroyMenu(menu);
+    PostMessageW(hwnd, WM_NULL, 0, 0);
+    if choice > 0 {
+        SendMessageW(hwnd, WM_COMMAND, choice as u16 as usize, 0);
+    }
 }
 fn device_subtitle(on: bool, state: Option<&DeviceState>, device: &str) -> String {
     let status = match state.map(|s| s.state) {
@@ -413,8 +499,23 @@ unsafe fn menu_item(menu: HMENU, id: u16, label: &str, on: bool, enabled: bool) 
         wide(label).as_ptr(),
     );
 }
+/// Only on a change: setting a control's text or state repaints it at
+/// once, inside the Ui borrow, where it can only get default colours (a
+/// flash on every refresh).
 unsafe fn set_text(hwnd: HWND, value: &str) {
-    SetWindowTextW(hwnd, wide(value).as_ptr());
+    if text(hwnd) != value {
+        SetWindowTextW(hwnd, wide(value).as_ptr());
+    }
+}
+unsafe fn enable(hwnd: HWND, on: bool) {
+    if (IsWindowEnabled(hwnd) != 0) != on {
+        EnableWindow(hwnd, on as i32);
+    }
+}
+unsafe fn select(combo: HWND, index: usize) {
+    if SendMessageW(combo, CB_GETCURSEL, 0, 0) != index as isize {
+        SendMessageW(combo, CB_SETCURSEL, index, 0);
+    }
 }
 unsafe fn text(hwnd: HWND) -> String {
     let n = GetWindowTextLengthW(hwnd);
