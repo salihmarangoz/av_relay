@@ -8,7 +8,7 @@
 //
 //   swift run avrelay-devserver [--port 48100] [--dir DIR] [--name NAME] [--media test]
 //
-// Then type `pair` for a code. Commands: pair, close, list, remove ID, quit.
+// Then type `pair` for a code. Commands: pair, close, list, remove ID, stats, quit.
 
 import AVRelayCore
 import AVRelayMedia
@@ -64,12 +64,14 @@ var configuration = RelayServer.Configuration(name: name, app: "AV Relay devserv
 configuration.port = port
 let server = RelayServer(configuration: configuration, store: store)
 let handler: any SessionHandler
+var mediaEngine: MediaEngine?
 if testMedia {
     var settings = MediaEngine.Settings()
     settings.camera = .testPattern
     settings.microphone = .testTone
     let engine = MediaEngine(settings: settings)
     engine.onStatus = { status in print("media: camera \(status.video.state), microphone \(status.audio.state)") }
+    mediaEngine = engine
     handler = engine
 } else {
     handler = FakeMedia()
@@ -77,7 +79,7 @@ if testMedia {
 await server.setHandler(handler)
 let listening = try await server.start()
 print("AV Relay dev server: TCP \(listening), device id \(store.deviceID), state in \(directory.path), media: \(testMedia ? "test pattern + tone" : "none")")
-print("commands: pair, close, list, remove ID, quit")
+print("commands: pair, close, list, remove ID, stats, quit")
 
 Task {
     for await event in server.events {
@@ -105,11 +107,13 @@ for try await line in FileHandle.standardInput.bytes.lines {
         } else {
             print("no such device id")
         }
+    case "stats":
+        print(await mediaEngine?.statisticsSummary() ?? "no media engine (start with --media test)")
     case "quit":
         await server.stop()
         exit(0)
     case nil: break
-    default: print("commands: pair, close, list, remove ID, quit")
+    default: print("commands: pair, close, list, remove ID, stats, quit")
     }
 }
 await server.stop()

@@ -44,6 +44,16 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
 
     static let defaultFormat = VideoFormat(width: 1280, height: 720, fps: 30)
 
+    /// What the menu bar shows: the camera's and microphone's states.
+    public struct Status: Sendable, Equatable {
+        public var video: DeviceState
+        public var audio: DeviceState
+        public static let idle = Status(video: .off, audio: .off)
+    }
+
+    /// Called (on a background queue) whenever the status changes.
+    public var onStatus: (@Sendable (Status) -> Void)?
+
     private let queue = DispatchQueue(label: "av-relay.media")
     private let log = Logger(subsystem: "io.github.salihmarangoz.avrelay", category: "media")
     private var settings: Settings
@@ -68,8 +78,39 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
         microphone.onFailure = { [weak self] error in self?.queue.async { self?.call?.deviceFailed(.audio, error) } }
     }
 
+    /// Frames the camera has delivered, and its mode (diagnostics).
+    var cameraFramesCaptured: Int { camera.framesCaptured }
+    var cameraMode: String? { camera.activeMode }
+
     /// Whether libwebrtc has the microphone recording (tests).
     var microphoneIsRecording: Bool { microphone.isRecording }
+
+    /// A few lines on how the current call is doing (diagnostics).
+    public func statisticsSummary() async -> String {
+        guard let report = await statistics() else { return "no call" }
+        var lines: [String] = []
+        func values(_ type: String, kind: String? = nil) -> [[String: NSObject]] {
+            report.statistics.values.filter { $0.type == type && (kind == nil || $0.values["kind"] as? String == kind) }.map(\.values)
+        }
+        func show(_ v: [String: NSObject], _ keys: [String]) -> String {
+            keys.compactMap { key in v[key].map { "\(key)=\($0)" } }.joined(separator: " ")
+        }
+        for v in values("outbound-rtp", kind: "video") {
+            lines.append("video out: " + show(v, ["frameWidth", "frameHeight", "framesPerSecond", "framesEncoded", "keyFramesEncoded",
+                                                 "targetBitrate", "qualityLimitationReason", "nackCount", "pliCount", "firCount",
+                                                 "retransmittedPacketsSent", "encoderImplementation"]))
+        }
+        for v in values("outbound-rtp", kind: "audio") {
+            lines.append("audio out: " + show(v, ["packetsSent", "targetBitrate", "nackCount", "retransmittedPacketsSent"]))
+        }
+        for v in values("remote-inbound-rtp") {
+            lines.append("\(v["kind"] ?? "?" as NSString) as received: " + show(v, ["packetsLost", "fractionLost", "jitter", "roundTripTime"]))
+        }
+        for v in values("candidate-pair") where (v["nominated"] as? NSNumber)?.boolValue == true {
+            lines.append("path: " + show(v, ["availableOutgoingBitrate", "currentRoundTripTime", "bytesSent", "bytesReceived"]))
+        }
+        return lines.isEmpty ? "no media stats yet" : lines.joined(separator: "\n")
+    }
 
     /// The current call's WebRTC statistics (tests, diagnostics).
     func statistics() async -> RTCStatisticsReport? {
@@ -131,6 +172,7 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
             guard let call, call.channel === channel else { return }
             call.close()
             self.call = nil
+            onStatus?(.idle)
         }
     }
 
@@ -446,6 +488,7 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
             guard message != lastReported else { return }
             lastReported = message
             outbox?.yield(message)
+            engine.onStatus?(Status(video: video, audio: audio))
         }
 
         // MARK: RTCPeerConnectionDelegate (libwebrtc's signaling thread)

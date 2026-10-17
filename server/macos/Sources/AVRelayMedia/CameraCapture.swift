@@ -32,6 +32,12 @@ final class CameraCapture: NSObject, @unchecked Sendable {
     private var timer: DispatchSourceTimer?
     private var pool: CVPixelBufferPool?
     private var frameIndex = 0
+    private let counter = NSLock()
+    private var _captured = 0
+    /// Frames the camera has delivered so far (diagnostics).
+    var framesCaptured: Int { counter.withLock { _captured } }
+    /// The camera mode in use, e.g. "1280x720 at 30 fps max" (diagnostics).
+    private(set) var activeMode: String?
     private var observers: [NSObjectProtocol] = []
 
     init(videoSource: RTCVideoSource, source: CameraSource) {
@@ -168,6 +174,8 @@ final class CameraCapture: NSObject, @unchecked Sendable {
             device.activeVideoMinFrameDuration = CMTime(value: 1000, timescale: CMTimeScale(fps * 1000))
         }
         let dims = size(chosen)
+        let maxFPS = chosen.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0
+        activeMode = "\(dims.width)x\(dims.height), up to \(Int(maxFPS)) fps"
         log.info("camera mode \(dims.width)x\(dims.height) for \(format.width)x\(format.height)@\(format.fps)")
     }
 
@@ -233,6 +241,7 @@ final class CameraCapture: NSObject, @unchecked Sendable {
 
     private func deliver(_ pixelBuffer: CVPixelBuffer, timeNs: Int64) {
         guard running else { return }
+        counter.withLock { _captured += 1 }
         if !deliveredSinceStart {
             deliveredSinceStart = true
             onCapturing?()
