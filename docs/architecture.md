@@ -115,7 +115,10 @@ level 3.1 (1080p at about 13 fps), so the encoder runs at level 5.1, which
 every receiver must decode (protocol section 8.2). The bandwidth estimate
 starts at half the format's cap instead of libwebrtc's ~300 kbit/s, which
 would also make it start 1080p at a lower resolution; GCC still backs off
-if the Wi-Fi can't carry it.
+if the Wi-Fi can't carry it. The estimate is set there again whenever video
+starts again: while only audio flows, it sinks to its 300 kbit/s floor, and
+video resumed from there started at 320x180 and 10 fps and took about 25 s
+to climb back.
 
 **Testing the real devices.** Only an app bundle may open the camera and
 microphone, so the app has a self-test (`--self-test`) that sends both
