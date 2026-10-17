@@ -1,5 +1,6 @@
-//! The pairing window: the Mac's address and port first (as the Mac's
-//! pairing window shows them), then the 6-digit code.
+//! The pairing window: which sender first, picked from those found on the
+//! network or typed in (address and port, as the sender's pairing window
+//! shows them), then the 6-digit code.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -14,6 +15,14 @@ use crate::proto::DEFAULT_PORT;
 use crate::proto::pairing::PairingAttempt;
 
 use super::Ui;
+
+/// A sender found on the network, and the check mark its row shows while
+/// it's selected.
+struct Found {
+    host: String,
+    port: u16,
+    check: gtk::Image,
+}
 
 struct Pending {
     attempt: PairingAttempt<TcpStream>,
@@ -67,32 +76,48 @@ fn build(ui: &Rc<Ui>) -> adw::Window {
     toolbar.add_top_bar(&adw::HeaderBar::new());
     toolbar.set_content(Some(&stack));
     let win = adw::Window::builder()
-        .title("Pair with a Mac")
+        .title("Pair with a sender")
         .default_width(460)
-        .default_height(600)
+        .default_height(620)
         .content(&toolbar)
         .application(&ui.app)
         .build();
     let pending: Rc<RefCell<Option<Pending>>> = Rc::default();
 
-    // --- 1. address -----------------------------------------------------
+    // --- 1. which sender: found on the network, or typed in ---------------
     let address_page = page();
-    address_page.append(&label("Pair with your Mac", &["title-2"]));
+    address_page.append(&label("Pair with a sender", &["title-2"]));
     address_page.append(&label(
-        "On the Mac, open AV Relay in the menu bar and choose Allow Pairing…, then enter the address and port it shows.",
+        "On the sender, the Mac whose camera and microphone you want to use, choose Allow Pairing… in AV Relay's menu bar menu. It shows a code.",
         &["dim-label"],
     ));
+    let views = adw::ViewStack::new();
+    let switcher = adw::ViewSwitcher::builder().stack(&views).policy(adw::ViewSwitcherPolicy::Wide).halign(gtk::Align::Center).build();
+    address_page.append(&switcher);
+
+    // Found: senders answering on Bonjour. Clicking one selects it.
+    let found_page = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(12).build();
+    let found_group = adw::PreferencesGroup::builder().title("Senders on this network").build();
+    let refresh = gtk::Button::builder().icon_name("view-refresh-symbolic").tooltip_text("Search again").valign(gtk::Align::Center).build();
+    refresh.add_css_class("flat");
+    found_group.set_header_suffix(Some(&refresh));
+    let list = gtk::ListBox::builder().selection_mode(gtk::SelectionMode::Single).activate_on_single_click(false).build();
+    list.add_css_class("boxed-list");
+    found_group.add(&list);
+    found_page.append(&found_group);
+    views.add_titled_with_icon(&found_page, Some("found"), "Auto-discovery", "network-wireless-symbolic");
+
+    // Manual: the address and port the sender's pairing window shows.
+    let manual_page = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(12).build();
+    manual_page.append(&label("Type the address and port that the sender's pairing window shows.", &["dim-label"]));
     let fields = adw::PreferencesGroup::new();
-    let address = adw::EntryRow::builder().title("Mac address").build();
+    let address = adw::EntryRow::builder().title("Address").build();
     let port = adw::EntryRow::builder().title("Port").text(DEFAULT_PORT.to_string()).input_purpose(gtk::InputPurpose::Digits).build();
     fields.add(&address);
     fields.add(&port);
-    address_page.append(&fields);
-
-    let found = adw::PreferencesGroup::builder().title("On this network").build();
-    let looking = adw::ActionRow::builder().title("Looking for Macs…").build();
-    found.add(&looking);
-    address_page.append(&found);
+    manual_page.append(&fields);
+    views.add_titled_with_icon(&manual_page, Some("manual"), "Manual", "document-edit-symbolic");
+    address_page.append(&views);
 
     let address_error = error_label();
     address_page.append(&address_error);
@@ -147,47 +172,111 @@ fn build(ui: &Rc<Ui>) -> adw::Window {
     done.set_child(Some(&close));
     stack.add_named(&done, Some("done"));
 
-    // Macs answering on Bonjour, to fill the fields with one click.
-    {
-        let handle = ui.rt.spawn_blocking(|| discovery::browse(Duration::from_secs(3)));
-        let (found, looking, address, port) = (found.clone(), looking.clone(), address.clone(), port.clone());
-        glib::spawn_future_local(async move {
-            let macs = handle.await.unwrap_or_default();
-            if macs.is_empty() {
-                looking.set_title("None found. Type the address the Mac shows.");
-                return;
+    // The senders found, in the list's order.
+    let senders: Rc<RefCell<Vec<Found>>> = Rc::default();
+    // Continue needs a selected sender on the first tab; the second checks
+    // its fields when clicked.
+    let update_next = {
+        let (views, list, next) = (views.clone(), list.clone(), next.clone());
+        move || next.set_sensitive(views.visible_child_name().as_deref() == Some("manual") || list.selected_row().is_some())
+    };
+    let update_next = Rc::new(update_next);
+    let search = {
+        let (ui, list, senders, refresh, views, update_next) =
+            (ui.clone(), list.clone(), senders.clone(), refresh.clone(), views.clone(), update_next.clone());
+        move || {
+            list.remove_all();
+            senders.borrow_mut().clear();
+            let looking = adw::ActionRow::builder().title("Looking for senders…").activatable(false).selectable(false).build();
+            looking.add_prefix(&gtk::Spinner::builder().spinning(true).build());
+            list.append(&looking);
+            refresh.set_sensitive(false);
+            update_next();
+            let handle = ui.rt.spawn_blocking(|| discovery::browse(Duration::from_secs(3)));
+            let (list, senders, refresh, views, update_next) =
+                (list.clone(), senders.clone(), refresh.clone(), views.clone(), update_next.clone());
+            glib::spawn_future_local(async move {
+                let macs = handle.await.unwrap_or_default();
+                list.remove_all();
+                refresh.set_sensitive(true);
+                if macs.is_empty() {
+                    let none = adw::ActionRow::builder()
+                        .title("No sender found")
+                        .subtitle("Check that Allow Pairing… is open on it, or type its address.")
+                        .activatable(false)
+                        .selectable(false)
+                        .build();
+                    let manual = gtk::Button::builder().label("Type it in").valign(gtk::Align::Center).build();
+                    manual.connect_clicked(move |_| views.set_visible_child_name("manual"));
+                    none.add_suffix(&manual);
+                    list.append(&none);
+                    return;
+                }
+                for mac in macs {
+                    let row = adw::ActionRow::builder()
+                        .title(glib::markup_escape_text(&mac.name))
+                        .subtitle(format!("{}:{}", mac.address, mac.port))
+                        .build();
+                    row.add_prefix(&gtk::Image::from_icon_name("computer-symbolic"));
+                    let check = gtk::Image::from_icon_name("object-select-symbolic");
+                    check.set_visible(false);
+                    row.add_suffix(&check);
+                    list.append(&row);
+                    senders.borrow_mut().push(Found { host: mac.address.to_string(), port: mac.port, check });
+                }
+                // One sender: nothing to choose.
+                if senders.borrow().len() == 1 {
+                    list.select_row(list.row_at_index(0).as_ref());
+                }
+                update_next();
+            });
+        }
+    };
+    let search = Rc::new(search);
+    search();
+    refresh.connect_clicked({
+        let search = search.clone();
+        move |_| search()
+    });
+    // The selected sender shows a check mark, so the choice is plain to see.
+    list.connect_selected_rows_changed({
+        let (senders, update_next) = (senders.clone(), update_next.clone());
+        move |list| {
+            for (i, found) in senders.borrow().iter().enumerate() {
+                found.check.set_visible(list.row_at_index(i as i32).is_some_and(|r| r.is_selected()));
             }
-            found.remove(&looking);
-            for mac in macs {
-                let row = adw::ActionRow::builder()
-                    .title(glib::markup_escape_text(&mac.name))
-                    .subtitle(format!("{}:{}", mac.address, mac.port))
-                    .activatable(true)
-                    .build();
-                row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
-                let (address, port) = (address.clone(), port.clone());
-                row.connect_activated(move |_| {
-                    address.set_text(&mac.address.to_string());
-                    port.set_text(&mac.port.to_string());
-                });
-                found.add(&row);
-            }
-        });
-    }
+            update_next();
+        }
+    });
+    views.connect_visible_child_name_notify({
+        let update_next = update_next.clone();
+        move |_| update_next()
+    });
 
     let start = {
         let (ui, stack, pending, address, port, err, spinner, next, code) =
             (ui.clone(), stack.clone(), pending.clone(), address.clone(), port.clone(), address_error.clone(), spinner.clone(), next.clone(), code.clone());
+        let (views, list, senders) = (views.clone(), list.clone(), senders.clone());
         move || {
-            let host = address.text().trim().to_string();
-            let Ok(port_nr) = port.text().trim().parse::<u16>() else {
-                show_error(&err, "The port is a number, normally 48100.");
-                return;
+            let (host, port_nr) = if views.visible_child_name().as_deref() == Some("manual") {
+                let host = address.text().trim().to_string();
+                let Ok(port_nr) = port.text().trim().parse::<u16>() else {
+                    show_error(&err, "The port is a number, normally 48100.");
+                    return;
+                };
+                if host.is_empty() {
+                    show_error(&err, "Enter the sender's address, as its pairing window shows it.");
+                    return;
+                }
+                (host, port_nr)
+            } else {
+                let picked = list.selected_row().and_then(|r| senders.borrow().get(r.index() as usize).map(|f| (f.host.clone(), f.port)));
+                let Some(picked) = picked else {
+                    show_error(&err, "Pick a sender, or type its address under Manual.");
+                    return;
+                };
+                picked
             };
-            if host.is_empty() {
-                show_error(&err, "Enter the Mac's address, as its pairing window shows it.");
-                return;
-            }
             err.set_visible(false);
             next.set_sensitive(false);
             spinner.start();
@@ -217,6 +306,14 @@ fn build(ui: &Rc<Ui>) -> adw::Window {
     next.connect_clicked({
         let start = start.clone();
         move |_| start()
+    });
+    // Double-click or Enter on a sender goes on right away.
+    list.connect_row_activated({
+        let start = start.clone();
+        move |list, row| {
+            list.select_row(Some(row));
+            start()
+        }
     });
     address.connect_entry_activated({
         let start = start.clone();
