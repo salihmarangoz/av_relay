@@ -60,8 +60,9 @@ Download both apps from the [latest release](../../releases/latest).
 2. Open it. The first time, macOS says it can't check the app for malware,
    because it isn't signed with an Apple Developer ID. Go to **System
    Settings → Privacy & Security** and click **Open Anyway**.
-3. AV Relay appears in the menu bar and turns **Open at Login** on. macOS asks
-   for camera and microphone permission the first time Ubuntu uses them.
+3. AV Relay appears in the menu bar and turns **Open at Login** on. When
+   macOS asks whether it may use the **local network**, allow it; it asks for
+   camera and microphone permission the first time Ubuntu uses them.
 
 More in [docs/macos.md](docs/macos.md).
 
@@ -81,7 +82,7 @@ Not on the HWE kernel, or the camera says it's unavailable? See
 ## Pair
 
 1. **On the Mac:** click the AV Relay icon in the menu bar → **Allow
-   pairing…**. It shows a 6-digit code, its address and its port.
+   Pairing…**. It shows a 6-digit code, its address and its port.
 2. **On Ubuntu:** click the AV Relay icon in the top bar → **Pair with a
    Mac…**. Pick your Mac from the list (or type its address and port), click
    **Continue**, and type the code.
