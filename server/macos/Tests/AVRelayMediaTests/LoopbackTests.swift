@@ -41,7 +41,11 @@ import WebRTC
         #expect(outbound?.values["qualityLimitationReason"] as? String == "none")
         #expect(client.frames.size == CGSize(width: 1920, height: 1080), "size \(client.frames.size)")
         #expect(await client.inbound("video").mimeType == "video/H264")
-        #expect(await client.inbound("audio").packets - audioStart >= 50)  // 20 ms packets: ~100 in 2 s
+        let audioReceived = await client.inbound("audio").packets - audioStart
+        let audioSent = await engine.statistics()?.statistics.values
+            .first { $0.type == "outbound-rtp" && $0.values["kind"] as? String == "audio" }?.values["packetsSent"]
+        #expect(audioReceived >= 50,  // 20 ms packets: ~100 in 2 s
+                "audio packets received in 2 s: \(audioReceived); sent in total: \(audioSent.map { "\($0)" } ?? "?"); recording: \(engine.microphoneIsRecording)")
         #expect(engine.microphoneIsRecording)
 
         // Both off: after the linger, the mic stops recording and video stops.

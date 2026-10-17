@@ -5,6 +5,27 @@ serves them this Mac's camera and microphone, only while an app on them uses
 them. The protocol is in `docs/protocol.md`, the design in
 `docs/architecture.md`.
 
+## Install
+
+1. Download `AV-Relay-<version>-macOS.dmg` from the project's GitHub
+   Releases, open it, and drag **AV Relay** into **Applications**. Install it
+   there before the first launch: AV Relay starts itself at login, and the
+   login item remembers where the app is.
+2. Open it. The release is signed ad hoc (no Apple Developer ID), so macOS
+   refuses the first time: open **System Settings › Privacy & Security** and
+   click **Open Anyway** next to AV Relay, then confirm.
+3. AV Relay lives in the menu bar (no Dock icon). At first launch it turns
+   **Open at Login** on, so it runs whenever you're logged in; the menu has
+   the switch if you don't want that.
+4. When macOS asks whether AV Relay may find devices on your **local
+   network**, allow it: without it the other computer can't receive the
+   camera and microphone.
+5. Choose **Allow Pairing…** in the menu and enter the address, port and code
+   it shows on the other computer.
+6. The first time the other computer uses the camera or microphone, macOS
+   asks whether AV Relay may use them: allow both. After an update, macOS may
+   ask again (ad hoc signatures change with every build).
+
 ## Layout
 
 | path | what |
@@ -80,7 +101,11 @@ python3 -m venv .venv-vectors
 
 - **Signing.** Releases are signed ad hoc (no Apple Developer ID). The first
   launch needs System Settings › Privacy & Security › Open Anyway, and macOS
-  asks for camera and microphone access again after each update.
+  asks for camera and microphone access again after each update. For your
+  own builds, `scripts/build-app.sh` signs with a code-signing identity of
+  yours when `AVRELAY_SIGN_IDENTITY` names one (a self-signed certificate
+  is enough; see the script). The signature then stays the same from build
+  to build, and macOS remembers the permissions.
 - **Keys** live in `~/Library/Application Support/AV Relay/` (the folder
   0700, the key 0600), not in the Keychain, which would ask again after
   every ad hoc signed update.

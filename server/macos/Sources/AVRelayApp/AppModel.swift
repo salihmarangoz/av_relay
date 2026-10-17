@@ -64,6 +64,8 @@ final class AppModel: ObservableObject {
 
     enum Keys {
         static let camera = "camera", microphone = "microphone", port = "port"
+        /// Set once Open at Login was turned on at first launch; after that, the user's toggle decides.
+        static let loginItemDefaulted = "loginItemDefaulted"
     }
 
     static let defaultPort: UInt16 = 48100
@@ -97,6 +99,7 @@ final class AppModel: ObservableObject {
         engine.onStatus = { [weak self] status in
             Task { @MainActor in self?.media = status }
         }
+        enableOpenAtLoginOnFirstLaunch()
         refreshDevices()
         for name in [AVCaptureDevice.wasConnectedNotification, AVCaptureDevice.wasDisconnectedNotification] {
             deviceObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -104,6 +107,17 @@ final class AppModel: ObservableObject {
             })
         }
         Task { await startServer() }
+    }
+
+    /// AV Relay should run whenever the Mac is on, so Open at Login starts
+    /// out on. Only the first launch does this: if the user turns it off,
+    /// it stays off. (Not for the self-test, which only runs and quits.)
+    private func enableOpenAtLoginOnFirstLaunch() {
+        guard !defaults.bool(forKey: Keys.loginItemDefaulted), !CommandLine.arguments.contains("--self-test") else { return }
+        defaults.set(true, forKey: Keys.loginItemDefaulted)
+        if SMAppService.mainApp.status != .enabled {
+            openAtLogin = true
+        }
     }
 
     // MARK: Server
