@@ -16,7 +16,7 @@
     <p>Pair once with a 6-digit code shown on the sender; the connection is encrypted end to end.</p>
   </description>
   <launchable type="desktop-id">io.github.salihmarangoz.avrelay.desktop</launchable>
-  <url type="homepage">https://github.com/salihmarangoz/av_relay_mac_to_linux</url>
+  <url type="homepage">https://github.com/salihmarangoz/av_relay</url>
   <content_rating type="oars-1.1"/>
   <releases>
     <release version="0.1.0" date="2026-10-17"/>
