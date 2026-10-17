@@ -42,7 +42,7 @@ setvbuf(stdout, nil, _IOLBF, 0)  // line by line, also into a pipe
 
 var port: UInt16 = 48100
 var directory = FileManager.default.temporaryDirectory.appendingPathComponent("av-relay-devserver")
-var name = Host.current().localizedName ?? "Mac"
+var name = Host.current().localizedName ?? "AV Relay sender"
 var testMedia = false
 var arguments = CommandLine.arguments.dropFirst()
 while let flag = arguments.popFirst() {

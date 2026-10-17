@@ -6,7 +6,7 @@
 // allows at the frame size, and the level comes from the client's SDP
 // answer. An answer that just echoes the offer's level 3.1 would hold
 // 1080p to about 13 fps. The client must decode up to level 5.1
-// (docs/protocol.md, section 8.2), so the Mac encodes at that level
+// (docs/protocol.md, section 8.2), so the sender encodes at that level
 // whatever the answer says.
 
 import WebRTC

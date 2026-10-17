@@ -1,9 +1,11 @@
 # AV Relay protocol, version 1
 
-This document is the source of truth for how the Mac app (the **server**) and
-a client app (the **client**; today the Linux app) talk to each other. Both
+This document is the source of truth for how the **sender** (the server,
+which owns a camera and microphone; today the macOS app) and a **receiver**
+(the client, which presents them as virtual devices; today the Linux app)
+talk to each other. Both
 implementations follow it, and a change to the protocol lands here first and
-is reviewed by the other side. Nothing in it is specific to Linux, so other
+is reviewed by the other side. Nothing in it is specific to one platform, so other
 clients (see `client/windows/README.md`) can plug in later.
 
 The key words MUST, SHOULD and MAY are used as in RFC 2119.
@@ -27,7 +29,7 @@ The key words MUST, SHOULD and MAY are used as in RFC 2119.
 ## 1. Overview
 
 ```
- Mac (server)                                        client (e.g. Ubuntu)
+ sender (server)                                     receiver (client)
  ────────────                                        ────────────────────
  TCP 48100  ◄──── control: Noise-encrypted JSON ────  connects with IP:port
             ────  pairing once (6-digit code)    ────
@@ -35,24 +37,24 @@ The key words MUST, SHOULD and MAY are used as in RFC 2119.
             ════ DTLS-SRTP, UDP, ICE (LAN)  ═════
 ```
 
-- The **server** runs on the Mac. It owns the camera and microphone, listens
+- The **sender** (server) owns the camera and microphone, listens
   on TCP port **48100** (configurable) and advertises itself over Bonjour.
 - The **client** connects to it. The first time, the user pairs it with a
-  6-digit code shown on the Mac. After that the two reconnect on their own.
+  6-digit code shown on the sender. After that the two reconnect on their own.
 - One TCP connection, the **control channel**, carries everything except
   media: WebRTC signaling (SDP and ICE candidates) and the client's requests
   to turn the camera and microphone on or off. It is encrypted and mutually
   authenticated with the keys exchanged at pairing (Noise).
 - **Media** flows over a WebRTC peer connection set up through the control
-  channel: H.264 video and Opus audio, sent by the Mac, received by the
+  channel: H.264 video and Opus audio, sent by the sender, received by the
   client. The control channel authenticates the SDP, and with it the DTLS
   fingerprints, so the media is end-to-end protected by the same pairing.
 - The camera and microphone run **only while an app on the client uses
-  them**: the client says what it needs, and the Mac starts or stops capture.
+  them**: the client says what it needs, and the sender starts or stops capture.
 
 ## 2. Identities and keys
 
-Each installation (each Mac, each client) has one long-term **static key**:
+Each installation (each sender, each receiver) has one long-term **static key**:
 an X25519 key pair, generated on first start and kept until the user resets
 the app. It is the device's identity for pairing and sessions.
 
@@ -63,19 +65,19 @@ the app. It is the device's identity for pairing and sessions.
   key, name, device ID, time paired); the client keeps the paired server
   (static public key, name, device ID, last address and port).
 - The static private key MUST be stored readable only by the user (the
-  macOS Keychain on the Mac; a mode 0600 file or the Secret Service on
-  Linux). Public data (paired devices) MAY be stored in plain files.
+  platform's keychain, or a file readable only by the user, mode 0600).
+  Public data (paired devices) MAY be stored in plain files.
 
 ## 3. Finding the server
 
 - The server listens on TCP **48100** by default, on all interfaces. The
-  user can change the port on the Mac.
+  user can change the port on the sender.
 - The server advertises a Bonjour (DNS-SD) service: type `_avrelay._tcp`,
-  the listening port, instance name = the Mac's name as the user set it,
+  the listening port, instance name = the sender computer's name as the user set it,
   and TXT records `v=1` and `id=<device ID>`.
 - Pairing always starts from an address the user types (IP and port), as
-  shown in the Mac's pairing window. Bonjour is only used to find a
-  **paired** Mac again when its address changes (DHCP): the client looks for
+  shown in the sender's pairing window. Bonjour is only used to find a
+  **paired** sender again when its address changes (DHCP): the client looks for
   an `_avrelay._tcp` instance whose `id` matches the paired device ID.
 
 ## 4. Connections, framing and the preamble
@@ -108,7 +110,7 @@ are base64 (RFC 4648, standard alphabet, with padding).
 
 ## 5. Pairing
 
-Pairing turns a 6-digit code, which the user reads on the Mac and types on
+Pairing turns a 6-digit code, which the user reads on the sender and types on
 the client, into an exchange of the two static public keys. A 6-digit code
 has only ~20 bits of entropy, so it is never used as a key directly: it goes
 through **CPace**, a balanced PAKE (draft-irtf-cfrg-cpace-21, suite
@@ -117,17 +119,17 @@ nothing to brute-force offline. The CPace output then keys a **Noise
 XXpsk3** handshake that carries the static keys and confirms that both
 sides used the same code.
 
-### 5.1 The pairing window on the Mac
+### 5.1 The pairing window on the sender
 
-- The user opens it (menu bar → *Allow Pairing…*). Only a person at the Mac
+- The user opens it (in the macOS sender: menu bar → *Allow Pairing…*). Only a person at the sender
   can open it; nothing on the network can.
 - The server draws a code: a uniform random integer 0–999999 from the system
   CSPRNG, written as 6 ASCII digits with leading zeros (`042137`). It shows
-  it as `042 137`, with the Mac's addresses and port, and a countdown.
+  it as `042 137`, with the sender's addresses and port, and a countdown.
 - The window is open for **120 seconds** (or until the user closes it).
 - **One attempt per code.** The code is used up when the server receives the
   client's `cpace` message, whatever happens next. After a failed attempt
-  the Mac says so, and the user opens the window again for a new code.
+  the sender says so, and the user opens the window again for a new code.
 - While an attempt is in progress, other pairing connections get
   `{"type": "error", "code": "busy"}`; when no window is open, they get
   `{"type": "error", "code": "not-pairing"}`. Both are plaintext, then the
@@ -138,8 +140,8 @@ sides used the same code.
 
 ```mermaid
 sequenceDiagram
-    participant C as Client
-    participant S as Server (Mac)
+    participant C as Receiver (client)
+    participant S as Sender (server)
     C->>S: preamble {"proto":"av-relay","version":1,"mode":"pair"}
     S->>C: {"type":"pair-start","sid":sid_s}  (or error, then close)
     Note over C: user types the code
@@ -174,7 +176,7 @@ sequenceDiagram
 Any failure after step 4 (a bad point, Noise decryption failing, a timeout,
 the connection dropping) ends the attempt: both sides close, store nothing,
 and tell the user. On the client: *"Pairing failed. Check the code and try
-again; the Mac shows a new code each time."* The whole exchange MUST finish
+again; the sender shows a new code each time."* The whole exchange MUST finish
 within 60 seconds of the preamble (it waits on the user typing the code).
 
 ### 5.3 CPace parameters
@@ -204,7 +206,7 @@ the client is the initiator (A), the server the responder (B).
 - `psk = HKDF-SHA256(salt = empty, IKM = ISK, info = b"av-relay/1 pairing psk", L = 32)`.
 
 `lv_cat` prepends each argument's length (LEB128) to it; see the draft's
-appendix A. Each role is fixed (the Mac is always the responder), so the
+appendix A. Each role is fixed (the sender is always the responder), so the
 roles in `CI` rule out reflection and role confusion.
 
 ### 5.4 Noise for pairing
@@ -218,7 +220,7 @@ roles in `CI` rule out reflection and role confusion.
 - After the handshake the server sends one transport message:
 
 ```json
-{"type": "paired", "name": "<Mac name>", "device_id": "<server device ID>", "app": "AV Relay 0.1.0 macOS"}
+{"type": "paired", "name": "<sender name>", "device_id": "<server device ID>", "app": "AV Relay 0.1.0 macOS"}
 ```
 
 Message 3 and every transport message depend on the psk, so the server
@@ -247,10 +249,10 @@ message (section 7).
 **Unknown client.** IK carries the client's static key in message 1. If it
 isn't in the server's paired list, the server still completes the handshake,
 sends `{"type": "error", "code": "not-paired"}` and closes. The client then
-tells the user the Mac no longer knows this device and offers to pair again.
+tells the user the sender no longer knows this device and offers to pair again.
 If the server can't decrypt message 1 at all (the client holds a stale server
-key, e.g. after the Mac app was reset), it closes; the client shows *"Couldn't
-authenticate the Mac. If AV Relay was reset on the Mac, pair again."*
+key, e.g. after the sender app was reset), it closes; the client shows *"Couldn't
+authenticate the sender. If AV Relay was reset on it, pair again."*
 
 **Authenticated only at `hello`.** Anyone on the network can record and
 replay a client's message 1, and the server can't tell a replay apart:
@@ -282,7 +284,7 @@ fields. Binary values are base64.
 | `media` | `video: bool`, `audio: bool` | What the client needs right now (section 9). Sent after `hello` and on every change. |
 | `ice-restart` | – | Asks the server for a new offer with an ICE restart (e.g. the client's network changed). |
 | `ping` | `id` (integer) | Keepalive (section 10). |
-| `unpair` | – | The user removed this Mac on the client. The server deletes this client from its paired list, sends `bye` (`unpaired`) and closes. |
+| `unpair` | – | The user removed this sender on the client. The server deletes this client from its paired list, sends `bye` (`unpaired`) and closes. |
 | `bye` | `reason` | The client is closing (`quit`). |
 
 ### Server → client
@@ -294,7 +296,7 @@ fields. Binary values are base64.
 | `ice` | `candidate`, `sdpMid`, `sdpMLineIndex` | As above. |
 | `media-state` | `video: {...}`, `audio: {...}` | The state of capture (section 9). Sent after `welcome` and on every change. |
 | `pong` | `id` | Answer to `ping`, same `id`. |
-| `bye` | `reason` | The server is closing: `quit`, `unpaired` (the user removed this client on the Mac), `replaced`, `sleep` (the Mac is going to sleep: it refuses new sessions until it's awake, so the client SHOULD back off, e.g. 30 s, or wait for its Bonjour announcement, instead of retrying at once). Clients treat a reason they don't know like `quit`. |
+| `bye` | `reason` | The server is closing: `quit`, `unpaired` (the user removed this client on the sender), `replaced`, `sleep` (the sender is going to sleep: it refuses new sessions until it's awake, so the client SHOULD back off, e.g. 30 s, or wait for its Bonjour announcement, instead of retrying at once). Clients treat a reason they don't know like `quit`. |
 | `error` | `code`, `message` | Section 11. |
 
 `media-state` objects:
@@ -302,11 +304,11 @@ fields. Binary values are base64.
 ```json
 {"type": "media-state",
  "video": {"state": "on", "device": "FaceTime HD Camera", "width": 1280, "height": 720, "fps": 30},
- "audio": {"state": "error", "device": "MacBook Air Microphones", "error": "permission-denied"}}
+ "audio": {"state": "error", "device": "Built-in Microphone", "error": "permission-denied"}}
 ```
 
 `state` is one of `off`, `starting`, `on`, `error`; `device` is the
-user-facing name of the camera or microphone the Mac will use; `error`
+user-facing name of the camera or microphone the sender will use; `error`
 (with `state: "error"`) is one of `permission-denied`, `no-device`,
 `device-busy`, `failed`.
 
@@ -315,8 +317,8 @@ encoding of the same object is fine):
 
 ```mermaid
 sequenceDiagram
-    participant C as Client
-    participant S as Server (Mac)
+    participant C as Receiver (client)
+    participant S as Sender (server)
     C->>S: preamble {"mode":"session"}
     C->>S: Noise IK msg 1
     S->>C: Noise IK msg 2
@@ -349,7 +351,7 @@ sequenceDiagram
 
 ### 8.2 Codecs
 
-**Video: H.264** (encoded in hardware on the Mac by VideoToolbox).
+**Video: H.264** (encoded in hardware where the sender has it; the macOS sender uses VideoToolbox).
 - `packetization-mode=1`, Constrained High or Constrained Baseline profile,
   no B-frames.
 - The client MUST decode up to level 5.1 and SHOULD answer with
@@ -362,7 +364,7 @@ sequenceDiagram
   format.
 
 **Audio: Opus**, `opus/48000/2` with `minptime=10;useinbandfec=1`, mono
-(`stereo=0`), 20 ms frames, no DTX. The Mac's own echo cancellation, gain
+(`stereo=0`), 20 ms frames, no DTX. The sender's own echo cancellation, gain
 control and noise suppression are **off** by default: the app on the
 client side runs its own, and it has the far-end reference.
 
@@ -421,7 +423,7 @@ stateDiagram-v2
 - **Start at once.** On `media` with a kind `true`, the server MUST start
   that capture immediately (no debounce), whether or not the WebRTC
   connection is up yet, and report `starting`, then `on`. The client SHOULD
-  detect use and send `media` within 100 ms; the Mac camera itself takes a
+  detect use and send `media` within 100 ms; the sender's camera itself takes a
   few hundred milliseconds to deliver its first frame, so the client SHOULD
   show placeholder frames (and feed silence) until media arrives.
 - **Stop shortly after.** When a kind becomes `false`, the server keeps
@@ -429,7 +431,7 @@ stateDiagram-v2
   the device (or just probes it) doesn't flicker the camera light, then
   stops capture and reports `off`.
 - **Off means off.** While a kind is `off`, the server MUST NOT hold the
-  device open: the camera's light and the Mac's microphone indicator go
+  device open: the camera's light and the system's microphone indicator go
   out. (It MAY keep the m-section negotiated and send nothing, or set it
   `inactive` in a new offer; the client handles both.)
 - The server sends a fresh keyframe whenever video (re)starts; the client
@@ -475,10 +477,10 @@ of scope (though the server limits it where cheap, below).
 
 - **Pairing.** CPace keeps the code from offline guessing: each attempt is
   one online guess, a 1 in 10⁶ chance, and uses up the code. The window
-  opens only by hand on the Mac and lasts 120 seconds. An attacker who
+  opens only by hand on the sender and lasts 120 seconds. An attacker who
   races the user uses up the code and the user's own attempt then fails
   visibly (`busy`/`not-pairing`), so a successful attack can't go unnoticed.
-  The Mac shows the paired device's name, and the user can remove it.
+  The sender shows the paired device's name, and the user can remove it.
 - **Sessions.** Noise IK authenticates both static keys and gives forward
   secrecy once the handshake completes. Only clients in the paired list
   are served, and only after their `hello` decrypts, so a replayed
@@ -487,13 +489,13 @@ of scope (though the server limits it where cheap, below).
 - **Before authentication**, the server accepts at most 8 connections at a
   time, limits plaintext frames to 1024 bytes, and enforces the timeouts in
   sections 4 to 6.
-- **Bonjour** tells the LAN that an AV Relay server runs on this Mac, its
+- **Bonjour** tells the LAN that an AV Relay sender runs on this computer, its
   name and its device ID. This is deliberate (it lets paired clients follow
   DHCP changes) and reveals no key material.
 - **Static keys** stay on the device (section 2). Removing a device on
   either side ends the pairing for good: the server drops the client's key;
   the client drops the server's.
-- The Mac only captures for a connected, paired client, and macOS shows its
+- The sender only captures for a connected, paired client, and the system (macOS) shows its
   camera light and microphone indicator whenever it does.
 
 ## 13. Test vectors

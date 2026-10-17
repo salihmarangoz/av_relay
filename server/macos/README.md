@@ -1,8 +1,8 @@
 # AV Relay for macOS (server)
 
-The Mac side of AV Relay: a menu bar app that pairs with other computers and
-serves them this Mac's camera and microphone, only while an app on them uses
-them. The protocol is in `docs/protocol.md`, the design in
+The AV Relay sender (server) for macOS: a menu bar app that pairs with
+receivers (clients) and serves them this Mac's camera and microphone, only
+while an app on the receiver uses them. The protocol is in `docs/protocol.md`, the design in
 `docs/architecture.md`.
 
 ## Install

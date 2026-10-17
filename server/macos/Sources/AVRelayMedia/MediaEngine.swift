@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// The Mac's media side of a session (docs/protocol.md, sections 8 and 9):
+// The sender's media side of a session (docs/protocol.md, sections 8 and 9):
 // a libwebrtc peer connection that offers H.264 video and Opus audio,
 // signaled over the control channel, with the camera and microphone
 // running only while the client needs them.
@@ -19,7 +19,7 @@ import os
 /// Where a session's signaling goes: the control channel, or a test double.
 public protocol SignalingChannel: AnyObject, Sendable {
     func send(_ message: Message) async throws
-    /// The Mac's address on the control connection; only candidates on it are signaled.
+    /// Our address on the control connection; only candidates on it are signaled.
     var localAddress: String? { get }
     /// Ends the session (the media can't recover).
     func terminate() async
@@ -62,7 +62,7 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
     private let videoSource: RTCVideoSource
     private let camera: CameraCapture
     private var call: Call?
-    /// Between stopAll() and resume(): the Mac sleeps, and nothing may open
+    /// Between stopAll() and resume(): the computer sleeps, and nothing may open
     /// the camera or microphone, not even events still queued for a session
     /// that has just ended.
     private var suspended = false
@@ -83,7 +83,7 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
     }
 
     /// Ends the call and returns once the camera and microphone are closed:
-    /// the Mac is about to sleep, and must not resume capture on wake.
+    /// the computer is about to sleep, and must not resume capture on wake.
     /// Nothing starts again until resume().
     public func stopAll() async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
@@ -175,7 +175,7 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
 
     // MARK: Entry points (any SignalingChannel)
 
-    /// The Mac is awake: sessions may use the camera and microphone again.
+    /// The computer is awake: sessions may use the camera and microphone again.
     public func resume() {
         queue.async { [self] in suspended = false }
     }

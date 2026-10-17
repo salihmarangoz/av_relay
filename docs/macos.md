@@ -1,8 +1,9 @@
-# AV Relay on the Mac
+# The AV Relay sender on macOS
 
-The Mac side of AV Relay is a small menu bar app. It pairs with your Ubuntu
-computer and serves it this Mac's camera and microphone, only while an app on
-Ubuntu is using them.
+On a Mac, the sender (server) side of AV Relay is a small menu bar app. It
+pairs with a receiver (client), such as AV Relay on your Linux computer, and
+serves it this Mac's camera and microphone, only while an app on the receiver
+is using them.
 
 ## Install
 
@@ -15,9 +16,9 @@ Ubuntu is using them.
    → Privacy & Security**, scroll down, and click **Open Anyway** next to
    AV Relay; confirm with your password or Touch ID.
 3. When macOS asks whether AV Relay may **find and connect to devices on your
-   local network**, click **Allow**. Without it, Ubuntu can pair but can't
+   local network**, click **Allow**. Without it, the receiver can pair but can't
    receive the camera or microphone.
-4. The first time an app on Ubuntu uses the camera or the microphone, macOS
+4. The first time an app on the receiver uses the camera or the microphone, macOS
    asks whether AV Relay may use it. Click **Allow** for both.
 
 AV Relay needs macOS 14 or newer, on Apple silicon or Intel.
@@ -56,8 +57,8 @@ Choose **Allow Pairing…**. The window shows:
   network; normally use the Wi-Fi or Ethernet one);
 - a 6-digit code, valid for 2 minutes and for one attempt.
 
-On Ubuntu, choose **Pair with a Mac…** in AV Relay's menu, pick this Mac (or
-type the address and port), and type the code. The Mac's window then says
+On the receiver, choose pairing in AV Relay's menu, pick this Mac (or type
+the address and port), and type the code. The pairing window then says
 **Paired with** and the computer's name.
 
 If the code was mistyped, the window says **Pairing failed**: each code works
@@ -67,9 +68,9 @@ eavesdropper nothing.
 
 ## When the camera and microphone run
 
-Only while an app on Ubuntu uses them. The Mac's camera light and the
+Only while an app on the receiver uses them. The Mac's camera light and the
 microphone indicator in the menu bar show it, as with any app. When the app
-on Ubuntu lets go, AV Relay turns them off 3 seconds later (so an app that
+on the receiver lets go, AV Relay turns them off 3 seconds later (so an app that
 reopens a device right away doesn't flicker the light). While nothing is
 connected, AV Relay doesn't touch them at all.
 
@@ -85,17 +86,17 @@ connected, AV Relay doesn't touch them at all.
 
 ## Troubleshooting
 
-**Ubuntu can't find or reach the Mac.** Check that AV Relay runs (its icon is
+**The receiver can't find or reach the Mac.** Check that AV Relay runs (its icon is
 in the menu bar), that both computers are on the same network, and the
 firewall (above). In the pairing window, use the address on the same network
-as the Ubuntu computer.
+as the receiver.
 
 **The camera or microphone says "not allowed".** Open **System Settings →
 Privacy & Security → Camera** (and **Microphone**) and turn AV Relay on. After
 an AV Relay update, macOS may ask again: the release is signed without an
 Apple Developer ID, and macOS ties the permission to the app's signature.
 
-**Connected, but no picture or sound on Ubuntu.** Check **System Settings →
+**Connected, but no picture or sound on the receiver.** Check **System Settings →
 Privacy & Security → Local Network**: AV Relay must be on.
 
 **The menu bar icon is missing.** On a MacBook with a notch, too many menu
