@@ -39,6 +39,7 @@ final class CameraCapture: NSObject, @unchecked Sendable {
     /// The camera mode in use, e.g. "1280x720 at 30 fps max" (diagnostics).
     private(set) var activeMode: String?
     private var observers: [NSObjectProtocol] = []
+    private var cadence = CadenceMeter()
     /// Counts starts, so a late notification or watchdog from an earlier
     /// start can't touch the current one.
     private var generation = 0
@@ -99,6 +100,11 @@ final class CameraCapture: NSObject, @unchecked Sendable {
             running = false
             stopCapture()
         }
+    }
+
+    /// How regularly frames arrived since the last call (diagnostics).
+    func takeCadence() -> Cadence {
+        queue.sync { cadence.take() }
     }
 
     /// Stops now and returns once the camera is closed (before sleep).
@@ -273,6 +279,7 @@ final class CameraCapture: NSObject, @unchecked Sendable {
     private func deliver(_ pixelBuffer: CVPixelBuffer, timeNs: Int64) {
         guard running else { return }
         counter.withLock { _captured += 1 }
+        cadence.tick()
         if !deliveredSinceStart {
             deliveredSinceStart = true
             onCapturing?()

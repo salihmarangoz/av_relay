@@ -109,6 +109,10 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
     /// A few lines on how the current call is doing (diagnostics).
     public func statisticsSummary() async -> String {
         guard let report = await statistics() else { return "no call" }
+        return Self.summarize(report)
+    }
+
+    static func summarize(_ report: RTCStatisticsReport) -> String {
         var lines: [String] = []
         func values(_ type: String, kind: String? = nil) -> [[String: NSObject]] {
             report.statistics.values.filter { $0.type == type && (kind == nil || $0.values["kind"] as? String == kind) }.map(\.values)
@@ -248,6 +252,7 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
         private var linger: [Kind: DispatchWorkItem] = [:]
         private var iceRecovery: DispatchWorkItem?
         private var closed = false
+        private var diagnostics: DispatchSourceTimer?
         private var queue: DispatchQueue { engine.queue }
         private var log: Logger { engine.log }
 
@@ -329,11 +334,35 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
 
             makeOffer(iceRestart: false)
             reportState()
+            startDiagnostics()
+        }
+
+        /// Every 5 s while the camera or microphone runs: one log line with the
+        /// call's WebRTC stats and the devices' own cadence, to tell a stutter
+        /// at the source from one on the network. Read it with
+        /// log show --predicate 'subsystem == "io.github.salihmarangoz.avrelay"' --info --last 10m
+        private func startDiagnostics() {
+            let timer = DispatchSource.makeTimerSource(queue: queue)
+            timer.schedule(deadline: .now() + 5, repeating: 5)
+            timer.setEventHandler { [weak self] in
+                guard let self, !closed, let peer else { return }
+                let mic = engine.microphone.takeCadence(), camera = engine.camera.takeCadence()
+                let active = [states[.video]!.state, states[.audio]!.state].contains { $0 != .off }
+                guard active else { return }
+                peer.statistics { [log] report in
+                    let summary = MediaEngine.summarize(report).replacingOccurrences(of: "\n", with: " | ")
+                    log.notice("stats: \(summary, privacy: .public) | mic \(mic.description, privacy: .public) | camera \(camera.description, privacy: .public)")
+                }
+            }
+            diagnostics = timer
+            timer.resume()
         }
 
         func close() {
             guard !closed else { return }
             closed = true
+            diagnostics?.cancel()
+            diagnostics = nil
             linger.values.forEach { $0.cancel() }
             iceRecovery?.cancel()
             // At once, no linger: the session is over.

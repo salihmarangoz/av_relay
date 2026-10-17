@@ -40,6 +40,7 @@ final class MicrophoneDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
     private var timer: DispatchSourceTimer?
     private var phase = 0.0
     private var observers: [NSObjectProtocol] = []
+    private var cadence = CadenceMeter()
     /// Counts starts, so a late notification or watchdog from an earlier
     /// start can't touch the current one.
     private var generation = 0
@@ -135,6 +136,11 @@ final class MicrophoneDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
         }
         log.info("recording stopped")
         return true
+    }
+
+    /// How regularly audio arrived since the last call (diagnostics).
+    func takeCadence() -> Cadence {
+        queue.sync { cadence.take() }
     }
 
     /// Stops now and returns once the microphone is closed (before sleep).
@@ -247,6 +253,7 @@ final class MicrophoneDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
     /// Hands 10-ms-or-so chunks to libwebrtc (it rebuffers to 10 ms itself).
     private func deliver(_ samples: UnsafeMutablePointer<Int16>, frames: Int, hostTime: UInt64) {
         guard recording, let delegate else { return }
+        cadence.tick(samples: frames)
         if !deliveredSinceStart {
             deliveredSinceStart = true
             onCapturing?()
