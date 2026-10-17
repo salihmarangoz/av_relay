@@ -1,6 +1,6 @@
 //! What the client keeps on disk, under $XDG_CONFIG_HOME/av-relay
 //! (~/.config/av-relay): its identity key (readable only by the user) and
-//! the paired Mac (docs/protocol.md, section 2).
+//! the paired sender (docs/protocol.md, section 2).
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
@@ -21,19 +21,22 @@ const SETTINGS_FILE: &str = "settings.json";
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(default)]
 pub struct Settings {
-    /// The virtual camera's format: the most the Mac sends.
+    /// The virtual camera's format: the most the sender sends.
     pub video: VideoFormat,
     /// Set once the first start has turned "start at login" on, so turning
     /// it off later sticks.
     pub autostart_offered: bool,
     /// Keep the virtual camera and microphone (and the default input) while
-    /// the Mac is away, instead of removing them after the grace period.
+    /// the sender is away, instead of removing them after the grace period.
     pub keep_devices: bool,
+    /// "Enable AV Relay". Off is as if the app were closed (no connection,
+    /// no devices), with the tray icon left to switch it back on.
+    pub enabled: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { video: VideoFormat { width: 1920, height: 1080, fps: 30 }, autostart_offered: false, keep_devices: false }
+        Self { video: VideoFormat { width: 1920, height: 1080, fps: 30 }, autostart_offered: false, keep_devices: false, enabled: true }
     }
 }
 
@@ -41,10 +44,10 @@ pub struct Store {
     dir: PathBuf,
 }
 
-/// The paired Mac and where it was last reached.
+/// The paired sender and where it was last reached.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct PairedMac {
-    /// The Mac's static public key, hex.
+pub struct PairedSender {
+    /// The sender's static public key, hex.
     pub public_key: String,
     pub device_id: String,
     pub name: String,
@@ -54,10 +57,10 @@ pub struct PairedMac {
     pub paired_at: u64,
 }
 
-impl PairedMac {
+impl PairedSender {
     pub fn key(&self) -> Result<[u8; 32]> {
-        let bytes = hex_decode(&self.public_key).context("the paired Mac's key isn't hex")?;
-        bytes.try_into().ok().context("the paired Mac's key isn't 32 bytes")
+        let bytes = hex_decode(&self.public_key).context("the paired sender's key isn't hex")?;
+        bytes.try_into().ok().context("the paired sender's key isn't 32 bytes")
     }
 }
 
@@ -118,7 +121,7 @@ impl Store {
         }
     }
 
-    pub fn paired_mac(&self) -> Result<Option<PairedMac>> {
+    pub fn paired_sender(&self) -> Result<Option<PairedSender>> {
         let path = self.dir.join(PAIRED_FILE);
         match fs::read(&path) {
             Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes).with_context(|| format!("reading {}", path.display()))?)),
@@ -127,8 +130,8 @@ impl Store {
         }
     }
 
-    pub fn save_paired_mac(&self, mac: &PairedMac) -> Result<()> {
-        self.write_atomic(PAIRED_FILE, &serde_json::to_vec_pretty(mac)?)
+    pub fn save_paired_sender(&self, sender: &PairedSender) -> Result<()> {
+        self.write_atomic(PAIRED_FILE, &serde_json::to_vec_pretty(sender)?)
     }
 
     pub fn settings(&self) -> Result<Settings> {
@@ -144,7 +147,7 @@ impl Store {
         self.write_atomic(SETTINGS_FILE, &serde_json::to_vec_pretty(settings)?)
     }
 
-    pub fn forget_paired_mac(&self) -> Result<()> {
+    pub fn forget_paired_sender(&self) -> Result<()> {
         match fs::remove_file(self.dir.join(PAIRED_FILE)) {
             Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e.into()),
             _ => Ok(()),
@@ -205,9 +208,9 @@ mod tests {
     #[test]
     fn paired_mac_round_trip() {
         let store = temp_store();
-        assert_eq!(store.paired_mac().unwrap(), None);
+        assert_eq!(store.paired_sender().unwrap(), None);
         let key = [7u8; 32];
-        let mac = PairedMac {
+        let sender = PairedSender {
             public_key: hex_encode(&key),
             device_id: crypto::device_id(&key),
             name: "MacBook Air".into(),
@@ -215,11 +218,11 @@ mod tests {
             port: 48100,
             paired_at: 1,
         };
-        store.save_paired_mac(&mac).unwrap();
-        assert_eq!(store.paired_mac().unwrap(), Some(mac.clone()));
-        assert_eq!(mac.key().unwrap(), key);
-        store.forget_paired_mac().unwrap();
-        assert_eq!(store.paired_mac().unwrap(), None);
+        store.save_paired_sender(&sender).unwrap();
+        assert_eq!(store.paired_sender().unwrap(), Some(sender.clone()));
+        assert_eq!(sender.key().unwrap(), key);
+        store.forget_paired_sender().unwrap();
+        assert_eq!(store.paired_sender().unwrap(), None);
         fs::remove_dir_all(store.dir()).unwrap();
     }
 
@@ -227,7 +230,7 @@ mod tests {
     fn settings_default_and_round_trip() {
         let store = temp_store();
         assert_eq!(store.settings().unwrap().video, VideoFormat { width: 1920, height: 1080, fps: 30 });
-        let s = Settings { video: VideoFormat { width: 1280, height: 720, fps: 30 }, autostart_offered: true, keep_devices: true };
+        let s = Settings { video: VideoFormat { width: 1280, height: 720, fps: 30 }, autostart_offered: true, keep_devices: true, enabled: false };
         store.save_settings(&s).unwrap();
         assert_eq!(store.settings().unwrap(), s);
         fs::remove_dir_all(store.dir()).unwrap();

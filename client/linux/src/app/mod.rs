@@ -1,18 +1,18 @@
-//! The client's core: keeps a session with the paired Mac, the virtual
+//! The client's core: keeps a session with the paired sender, the virtual
 //! camera and microphone, the media receiver and the default input. The
 //! tray (or the headless `run` command) drives it with [`Command`]s and
 //! shows its [`Status`].
 //!
-//! While the Mac is connected:
-//! - "MacBook Camera" exists and "MacBook Microphone" is the default input;
+//! While the sender is connected:
+//! - "AV Relay Camera" exists and "AV Relay Microphone" is the default input;
 //! - an app opening either device makes the client send `media`, so the
-//!   Mac's camera or microphone runs only while it's used (protocol.md 9).
+//!   sender's camera or microphone runs only while it's used (protocol.md 9).
 //!
 //! When the connection drops, the devices stay for a grace period (5 min),
-//! the camera showing a "Waiting for <Mac>…" picture and the microphone
+//! the camera showing a "Waiting for <sender>…" picture and the microphone
 //! silence, so a short drop goes unnoticed by apps; with "Keep virtual
 //! devices on" they stay for good. Meanwhile the core reconnects: the last
-//! address first, then wherever Bonjour finds the Mac.
+//! address first, then wherever Bonjour finds the sender.
 
 pub mod discovery;
 
@@ -30,7 +30,7 @@ use crate::media::{InboundStats, MediaEvent, Receiver, Sinks};
 use crate::proto::pairing::{self, ClientInfo, PairingAttempt};
 use crate::proto::session::{self, SessionError};
 use crate::proto::{CaptureState, ClientMsg, DeviceState, ServerMsg, VideoFormat};
-use crate::store::{PairedMac, Store, hex_encode};
+use crate::store::{PairedSender, Store, hex_encode};
 use crate::vcam::{self, CamStats, CameraFormat, VirtualCamera};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -42,13 +42,13 @@ const STATS_EVERY: Duration = Duration::from_secs(10);
 const SYNC_EVERY: Duration = Duration::from_secs(1);
 const SILENCE_LIMIT: Duration = Duration::from_secs(15);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
-/// While the devices are held for the Mac, someone is likely waiting on it
+/// While the devices are held for the sender, someone is likely waiting on it
 /// (a call showing the waiting picture): retry more often. An attempt costs
-/// a TCP connect on the LAN, and a Mac that refuses answers at once.
+/// a TCP connect on the LAN, and a sender that refuses answers at once.
 const BACKOFF_MAX_HELD: Duration = Duration::from_secs(10);
 const BONJOUR_WAIT: Duration = Duration::from_secs(3);
 /// webrtcbin doesn't recover well through ICE restarts: when media stays
-/// failed this long, start a fresh session instead (the Mac would give up
+/// failed this long, start a fresh session instead (the sender would give up
 /// after 30 s anyway, protocol.md 10).
 const MEDIA_FAILED_LIMIT: Duration = Duration::from_secs(10);
 /// How long the devices outlive a connection that dropped.
@@ -62,12 +62,15 @@ fn grace_period() -> Duration {
 pub enum Status {
     Starting,
     NotPaired { devices: Hold },
-    /// Paired, but the Mac isn't reachable right now.
-    Searching { mac: String, last_error: Option<String>, devices: Hold },
-    Connected { mac: String, camera: Device, mic: Device },
+    /// Paired, but the sender isn't reachable right now.
+    Searching { sender: String, last_error: Option<String>, devices: Hold },
+    Connected { sender: String, camera: Device, mic: Device },
+    /// Switched off ("Enable AV Relay"): no connection, no devices. `sender` is
+    /// the paired sender, if any.
+    Disabled { sender: Option<String> },
 }
 
-/// Whether the virtual devices exist while the Mac is away.
+/// Whether the virtual devices exist while the sender is away.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hold {
     None,
@@ -77,12 +80,12 @@ pub enum Hold {
     Always,
 }
 
-/// One of the Mac's devices as the UI shows it.
+/// One of the sender's devices as the UI shows it.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Device {
     /// An app on this computer is using the virtual device.
     pub used_here: bool,
-    /// The Mac's capture state and device name.
+    /// The sender's capture state and device name.
     pub state: Option<CaptureState>,
     pub name: Option<String>,
     pub error: Option<String>,
@@ -98,7 +101,9 @@ pub enum Command {
     VideoChanged,
     /// "Keep virtual devices on" changed (saved in the settings).
     KeepDevicesChanged,
-    /// Remove the pairing (on the Mac too, if it's connected).
+    /// "Enable AV Relay" changed (saved in the settings).
+    EnabledChanged,
+    /// Remove the pairing (on the sender too, if it's connected).
     Forget,
     Quit,
 }
@@ -112,7 +117,7 @@ pub struct Core {
 }
 
 impl Core {
-    /// Sets up what doesn't depend on the Mac. Problems with the camera
+    /// Sets up what doesn't depend on the sender. Problems with the camera
     /// (v4l2loopback) are reported, not fatal: the microphone still works.
     pub fn new(store: Store) -> Result<Arc<Self>> {
         let pw = PipeWire::start().context("connecting to PipeWire")?;
@@ -147,22 +152,22 @@ impl Core {
     }
 }
 
-/// Starts pairing with the Mac at `host:port`; the UI then asks for the
+/// Starts pairing with the sender at `host:port`; the UI then asks for the
 /// code and calls [`finish_pairing`].
 pub async fn start_pairing(host: &str, port: u16) -> Result<PairingAttempt<TcpStream>> {
     let stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host, port)))
         .await
-        .map_err(|_| anyhow!("No answer from {host}:{port}. Check the address and that AV Relay runs on the Mac."))?
+        .map_err(|_| anyhow!("No answer from {host}:{port}. Check the address and that AV Relay runs on the sender."))?
         .map_err(|e| anyhow!("Couldn't connect to {host}:{port}: {e}"))?;
     stream.set_nodelay(true)?;
     Ok(pairing::start(stream).await?)
 }
 
-/// Completes pairing with the code and saves the Mac.
+/// Completes pairing with the code and saves the sender.
 pub async fn finish_pairing(core: &Core, attempt: PairingAttempt<TcpStream>, host: &str, port: u16, code: &str) -> Result<String> {
     let me = core.store.identity()?;
     let server = attempt.finish(code, &me, &Core::client_info()).await?;
-    core.store.save_paired_mac(&PairedMac {
+    core.store.save_paired_sender(&PairedSender {
         public_key: hex_encode(&server.public_key),
         device_id: server.device_id.clone(),
         name: server.name.clone(),
@@ -216,18 +221,18 @@ impl Devices {
         self.mic_used.load(Ordering::Relaxed)
     }
 
-    /// The Mac is here: black until its first frame.
+    /// The sender is here: black until its first frame.
     fn show_live(&self) {
         if let Some(c) = &self.camera {
             c.set_placeholder(None);
         }
     }
 
-    /// The Mac is away: the waiting picture.
-    fn show_waiting(&self, mac: Option<&str>) {
+    /// The sender is away: the waiting picture.
+    fn show_waiting(&self, sender: Option<&str>) {
         let Some(c) = &self.camera else { return };
         let format = CameraFormat { width: self.format.width, height: self.format.height, fps: self.format.fps };
-        match vcam::waiting_frame(format, mac) {
+        match vcam::waiting_frame(format, sender) {
             Ok(frame) => c.set_placeholder(Some(frame)),
             Err(e) => log::warn!("drawing the waiting picture: {e:#}"),
         }
@@ -313,7 +318,7 @@ impl Kept {
     /// Between sessions: "keep on" makes the devices exist; otherwise they
     /// stay until the grace period ends. A pending quality change applies
     /// once no app uses the camera.
-    fn settle(&mut self, core: &Arc<Core>, mac: Option<&str>) {
+    fn settle(&mut self, core: &Arc<Core>, sender: Option<&str>) {
         let settings = core.store.settings().unwrap_or_default();
         if settings.keep_devices {
             self.until = None;
@@ -328,32 +333,53 @@ impl Kept {
         }
         if let Some(d) = &mut self.devices {
             d.apply_format(settings.video);
-            d.show_waiting(mac);
+            d.show_waiting(sender);
         }
     }
 
     fn expire(&mut self) {
         if self.until.is_some_and(|t| Instant::now() >= t) {
-            log::info!("the Mac stayed away; removing the virtual devices");
+            log::info!("the sender stayed away; removing the virtual devices");
             self.devices = None;
             self.until = None;
         }
     }
 }
 
-/// Runs until [`Command::Quit`]: connects to the paired Mac, keeps the
+/// Runs until [`Command::Quit`]: connects to the paired sender, keeps the
 /// session and the devices, and reconnects after drops.
 pub async fn run(core: Arc<Core>, status: watch::Sender<Status>, mut commands: mpsc::UnboundedReceiver<Command>) {
     let (notify_tx, notify_rx) = mpsc::unbounded_channel();
     let mut kept = Kept { devices: None, until: None, notify_tx, notify_rx };
     let mut backoff = Duration::from_secs(1);
     loop {
+        if !core.store.settings().unwrap_or_default().enabled {
+            // Switched off: as if closed (the default input goes back, the
+            // devices go, even when kept on), until switched on again.
+            if kept.devices.take().is_some() {
+                log::info!("switched off; removing the virtual devices");
+            }
+            kept.until = None;
+            let sender = core.store.paired_sender().ok().flatten().map(|m| m.name);
+            status.send_replace(Status::Disabled { sender });
+            match commands.recv().await {
+                Some(Command::Quit) | None => return,
+                Some(Command::Forget) => {
+                    if let Err(e) = core.store.forget_paired_sender() {
+                        log::error!("forgetting the sender: {e:#}");
+                    }
+                }
+                _ => {}
+            }
+            backoff = Duration::from_secs(1);
+            continue;
+        }
         let keep = core.store.settings().unwrap_or_default().keep_devices;
-        let mac = match core.store.paired_mac() {
-            Ok(Some(mac)) => mac,
+        let sender = match core.store.paired_sender() {
+            Ok(Some(sender)) => sender,
             other => {
                 if let Err(e) = other {
-                    log::error!("reading the paired Mac: {e:#}");
+                    log::error!("reading the paired sender: {e:#}");
                 }
                 kept.settle(&core, None);
                 status.send_replace(Status::NotPaired { devices: kept.hold(keep) });
@@ -363,16 +389,16 @@ pub async fn run(core: Arc<Core>, status: watch::Sender<Status>, mut commands: m
                 }
             }
         };
-        kept.settle(&core, Some(&mac.name));
+        kept.settle(&core, Some(&sender.name));
         let hold = kept.hold(keep);
         if !matches!(*status.borrow(), Status::Searching { .. }) {
-            status.send_replace(Status::Searching { mac: mac.name.clone(), last_error: None, devices: hold });
+            status.send_replace(Status::Searching { sender: sender.name.clone(), last_error: None, devices: hold });
         }
 
         let (ctl_tx, ctl_rx) = mpsc::unbounded_channel();
         // Scoped: the session borrows `kept` until its future is dropped.
         let (outcome, pending) = {
-        let attempt = connect_and_serve(&core, &mac, &status, ctl_rx, &mut kept);
+        let attempt = connect_and_serve(&core, &sender, &status, ctl_rx, &mut kept);
         tokio::pin!(attempt);
         let mut pending: Option<Command> = None;
         let outcome = loop {
@@ -386,6 +412,13 @@ pub async fn run(core: Arc<Core>, status: watch::Sender<Status>, mut commands: m
                     // Applied by the session (when the camera is idle) or after it.
                     Some(Command::VideoChanged) => { let _ = ctl_tx.send(Ctl::VideoChanged); continue; }
                     Some(Command::KeepDevicesChanged) => continue,
+                    Some(Command::EnabledChanged) => {
+                        if core.store.settings().unwrap_or_default().enabled {
+                            continue;
+                        }
+                        let _ = ctl_tx.send(Ctl::Quit);
+                        pending = Some(Command::EnabledChanged);
+                    }
                 },
             }
             // A session gets a moment to finish politely; an attempt that
@@ -403,10 +436,10 @@ pub async fn run(core: Arc<Core>, status: watch::Sender<Status>, mut commands: m
         match pending {
             Some(Command::Quit) => return,
             Some(Command::Forget) => {
-                if let Err(e) = core.store.forget_paired_mac() {
-                    log::error!("forgetting the Mac: {e:#}");
+                if let Err(e) = core.store.forget_paired_sender() {
+                    log::error!("forgetting the sender: {e:#}");
                 }
-                // Forgetting the Mac ends its devices too (unless kept on).
+                // Forgetting the sender ends its devices too (unless kept on).
                 if !core.store.settings().unwrap_or_default().keep_devices {
                     kept.devices = None;
                     kept.until = None;
@@ -428,40 +461,40 @@ pub async fn run(core: Arc<Core>, status: watch::Sender<Status>, mut commands: m
             }
             Ok(Ended::Stopped) => None,
             Ok(Ended::Unpaired) => {
-                log::info!("the Mac removed this computer");
-                let _ = core.store.forget_paired_mac();
+                log::info!("the sender removed this computer");
+                let _ = core.store.forget_paired_sender();
                 if !core.store.settings().unwrap_or_default().keep_devices {
                     kept.devices = None;
                     kept.until = None;
                 }
                 continue;
             }
-            Ok(Ended::MacAsleep) => {
+            Ok(Ended::SenderAsleep) => {
                 // protocol.md 7: back off; it refuses sessions until it wakes
                 // (capped lower below while the devices are held).
                 backoff = BACKOFF_MAX;
                 None
             }
             Err(e) => {
-                log::info!("connection to {}: {e:#}", mac.name);
+                log::info!("connection to {}: {e:#}", sender.name);
                 if let Some(SessionError::NotPaired | SessionError::AuthFailed) = e.downcast_ref::<SessionError>() {
-                    // The Mac no longer knows us, or was reset: pairing again is
+                    // The sender no longer knows us, or was reset: pairing again is
                     // the only way; keep trying slowly in case it comes back.
                     backoff = BACKOFF_MAX;
                 }
                 Some(format!("{e:#}"))
             }
         };
-        kept.settle(&core, Some(&mac.name));
+        kept.settle(&core, Some(&sender.name));
         let keep = core.store.settings().unwrap_or_default().keep_devices;
-        status.send_replace(Status::Searching { mac: mac.name.clone(), last_error, devices: kept.hold(keep) });
+        status.send_replace(Status::Searching { sender: sender.name.clone(), last_error, devices: kept.hold(keep) });
         let cap = if kept.devices.is_some() { BACKOFF_MAX_HELD } else { BACKOFF_MAX };
         backoff = backoff.min(cap);
         // Wait before the next attempt, minding the devices and commands.
-        match idle(&core, &mut kept, &mut commands, Some(Instant::now() + backoff), Some(&mac), &status).await {
+        match idle(&core, &mut kept, &mut commands, Some(Instant::now() + backoff), Some(&sender), &status).await {
             Some(Command::Quit) | None => return,
             Some(Command::Forget) => {
-                let _ = core.store.forget_paired_mac();
+                let _ = core.store.forget_paired_sender();
                 if !core.store.settings().unwrap_or_default().keep_devices {
                     kept.devices = None;
                     kept.until = None;
@@ -483,10 +516,10 @@ async fn idle(
     kept: &mut Kept,
     commands: &mut mpsc::UnboundedReceiver<Command>,
     wake: Option<Instant>,
-    mac: Option<&PairedMac>,
+    sender: Option<&PairedSender>,
     status: &watch::Sender<Status>,
 ) -> Option<Command> {
-    let mac_name = mac.map(|m| m.name.clone());
+    let sender_name = sender.map(|m| m.name.clone());
     let publish = |kept: &Kept| {
         let hold = kept.hold(core.store.settings().unwrap_or_default().keep_devices);
         status.send_modify(|s| match s {
@@ -511,11 +544,11 @@ async fn idle(
             }
             Some(()) = kept.notify_rx.recv() => {
                 // A quality change waits for the camera to be free.
-                kept.settle(core, mac_name.as_deref());
+                kept.settle(core, sender_name.as_deref());
             }
             cmd = commands.recv() => match cmd {
                 Some(Command::VideoChanged) | Some(Command::KeepDevicesChanged) => {
-                    kept.settle(core, mac_name.as_deref());
+                    kept.settle(core, sender_name.as_deref());
                     if !core.store.settings().unwrap_or_default().keep_devices && kept.devices.is_some() && kept.until.is_none() {
                         kept.until = Some(Instant::now() + grace_period());
                     }
@@ -534,34 +567,34 @@ enum Ctl {
 }
 
 enum Ended {
-    /// A session ran and ended (the Mac quit, the network dropped...).
+    /// A session ran and ended (the sender quit, the network dropped...).
     Served,
     /// Ended to apply a setting; reconnect at once.
     Restart,
-    /// The Mac is going to sleep: wait longer before reconnecting.
-    MacAsleep,
+    /// The sender is going to sleep: wait longer before reconnecting.
+    SenderAsleep,
     /// Stopped on request.
     Stopped,
-    /// The Mac (or this side) removed the pairing.
+    /// The sender (or this side) removed the pairing.
     Unpaired,
 }
 
 /// Connects (last address, then Bonjour) and serves one session.
 async fn connect_and_serve(
     core: &Arc<Core>,
-    mac: &PairedMac,
+    sender: &PairedSender,
     status: &watch::Sender<Status>,
     ctl: mpsc::UnboundedReceiver<Ctl>,
     kept: &mut Kept,
 ) -> Result<Ended> {
-    let stream = match connect(&mac.address, mac.port).await {
+    let stream = match connect(&sender.address, sender.port).await {
         Ok(s) => s,
         Err(first) => {
-            let id = mac.device_id.clone();
-            let found = tokio::task::spawn_blocking(move || discovery::find_mac(&id, BONJOUR_WAIT)).await?;
+            let id = sender.device_id.clone();
+            let found = tokio::task::spawn_blocking(move || discovery::find_sender(&id, BONJOUR_WAIT)).await?;
             match found {
-                Some((ip, port)) if (ip.to_string(), port) != (mac.address.clone(), mac.port) => {
-                    log::info!("Bonjour found {} at {ip}:{port}", mac.name);
+                Some((ip, port)) if (ip.to_string(), port) != (sender.address.clone(), sender.port) => {
+                    log::info!("Bonjour found {} at {ip}:{port}", sender.name);
                     connect(&ip.to_string(), port).await?
                 }
                 _ => return Err(first),
@@ -570,13 +603,13 @@ async fn connect_and_serve(
     };
     let peer = stream.peer_addr()?;
     let local = stream.local_addr()?;
-    serve(core, mac, status, stream, peer, local.ip(), ctl, kept).await
+    serve(core, sender, status, stream, peer, local.ip(), ctl, kept).await
 }
 
 async fn connect(host: &str, port: u16) -> Result<TcpStream> {
     let stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host, port)))
         .await
-        .map_err(|_| anyhow!("the Mac didn't answer at {host}:{port}"))??;
+        .map_err(|_| anyhow!("the sender didn't answer at {host}:{port}"))??;
     stream.set_nodelay(true)?;
     Ok(stream)
 }
@@ -590,7 +623,7 @@ enum Event {
 #[allow(clippy::too_many_arguments)]
 async fn serve(
     core: &Arc<Core>,
-    mac: &PairedMac,
+    sender: &PairedSender,
     status: &watch::Sender<Status>,
     stream: TcpStream,
     peer: SocketAddr,
@@ -602,7 +635,7 @@ async fn serve(
     // The camera's format if the devices exist (it's fixed while apps use
     // it), else the setting.
     let video: VideoFormat = kept.devices.as_ref().map(|d| d.format).unwrap_or_else(|| core.store.settings().unwrap_or_default().video);
-    let (mut reader, mut writer) = session::connect(stream, &me, &mac.key()?).await?;
+    let (mut reader, mut writer) = session::connect(stream, &me, &sender.key()?).await?;
     let info = Core::client_info();
     writer.send(&ClientMsg::Hello { name: info.name, app: info.app, video }).await?;
 
@@ -631,16 +664,16 @@ async fn serve(
 
     let welcome = tokio::time::timeout(WELCOME_TIMEOUT, events.recv())
         .await
-        .map_err(|_| anyhow!("the Mac didn't welcome us"))?
+        .map_err(|_| anyhow!("the sender didn't welcome us"))?
         .context("the connection closed")?;
-    let mac_name = match welcome {
+    let sender_name = match welcome {
         Event::Server(Ok(ServerMsg::Welcome { name, .. })) => name,
         Event::Server(Err(e)) => return Err(e.into()),
         Event::Server(Ok(other)) => return Err(anyhow!("expected welcome, got {other:?}")),
         Event::Media(_) => unreachable!("no media yet"),
     };
-    log::info!("connected to {mac_name} at {peer}");
-    remember_address(core, mac, peer);
+    log::info!("connected to {sender_name} at {peer}");
+    remember_address(core, sender, peer);
 
     // The devices exist from now on (they may already, from before).
     if kept.devices.is_none() {
@@ -677,7 +710,7 @@ async fn serve(
     let mut cam_state = Device { used_here: devices.camera_used(), ..Default::default() };
     let mut mic_state = Device { used_here: devices.mic_used(), ..Default::default() };
     let publish = |cam: &Device, mic: &Device| {
-        status.send_replace(Status::Connected { mac: mac_name.clone(), camera: cam.clone(), mic: mic.clone() });
+        status.send_replace(Status::Connected { sender: sender_name.clone(), camera: cam.clone(), mic: mic.clone() });
     };
     publish(&cam_state, &mic_state);
     // An app may still hold a device from before a drop: ask at once.
@@ -707,7 +740,7 @@ async fn serve(
                             ServerMsg::MediaState { video, audio } => {
                                 update_device(&mut cam_state, &video);
                                 update_device(&mut mic_state, &audio);
-                                // Without the Mac's camera, show the placeholder,
+                                // Without the sender's camera, show the placeholder,
                                 // not the last frame frozen.
                                 if video.state != CaptureState::On {
                                     if let Some(c) = &devices.camera { c.clear(); }
@@ -715,15 +748,15 @@ async fn serve(
                                 publish(&cam_state, &mic_state);
                             }
                             ServerMsg::Bye { reason } => {
-                                log::info!("{mac_name} said bye: {reason}");
+                                log::info!("{sender_name} said bye: {reason}");
                                 return Ok(match reason.as_str() {
                                     "unpaired" => Ended::Unpaired,
-                                    "sleep" => Ended::MacAsleep,
+                                    "sleep" => Ended::SenderAsleep,
                                     _ => Ended::Served,
                                 });
                             }
                             ServerMsg::Error { code, message } => {
-                                return Err(anyhow!("the Mac reported an error: {code} {}", message.unwrap_or_default()));
+                                return Err(anyhow!("the sender reported an error: {code} {}", message.unwrap_or_default()));
                             }
                             ServerMsg::Pong { .. } | ServerMsg::Welcome { .. } | ServerMsg::Unknown => {}
                         }
@@ -770,7 +803,7 @@ async fn serve(
             }
             _ = ping.tick() => {
                 if last_heard.elapsed() > SILENCE_LIMIT {
-                    return Err(anyhow!("the Mac stopped answering"));
+                    return Err(anyhow!("the sender stopped answering"));
                 }
                 if media_failed_since.is_some_and(|t| t.elapsed() > MEDIA_FAILED_LIMIT) {
                     return Err(anyhow!("the media connection failed and didn't recover"));
@@ -788,7 +821,7 @@ async fn serve(
                 }
                 Some(Ctl::Unpair) => {
                     writer.send(&ClientMsg::Unpair).await?;
-                    // The Mac answers bye(unpaired); don't wait long for it.
+                    // The sender answers bye(unpaired); don't wait long for it.
                     let _ = tokio::time::timeout(Duration::from_secs(2), events.recv()).await;
                     return Ok(Ended::Unpaired);
                 }
@@ -864,14 +897,14 @@ fn update_device(device: &mut Device, state: &DeviceState) {
 }
 
 /// Keeps the address that worked, for the next reconnect.
-fn remember_address(core: &Core, mac: &PairedMac, peer: SocketAddr) {
+fn remember_address(core: &Core, sender: &PairedSender, peer: SocketAddr) {
     let address = peer.ip().to_string();
-    if address != mac.address || peer.port() != mac.port {
-        let mut updated = mac.clone();
+    if address != sender.address || peer.port() != sender.port {
+        let mut updated = sender.clone();
         updated.address = address;
         updated.port = peer.port();
-        if let Err(e) = core.store.save_paired_mac(&updated) {
-            log::warn!("saving the Mac's new address: {e:#}");
+        if let Err(e) = core.store.save_paired_sender(&updated) {
+            log::warn!("saving the sender's new address: {e:#}");
         }
     }
 }

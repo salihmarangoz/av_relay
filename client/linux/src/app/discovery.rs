@@ -1,4 +1,4 @@
-//! Finding the paired Mac again when its address changed (DHCP): its
+//! Finding the paired sender again when its address changed (DHCP): its
 //! Bonjour service `_avrelay._tcp` carries its device ID in the TXT record
 //! (docs/protocol.md, section 3).
 
@@ -9,9 +9,9 @@ use mdns_sd::{ServiceDaemon, ServiceEvent};
 
 const SERVICE: &str = "_avrelay._tcp.local.";
 
-/// Looks for the Mac with `device_id` for up to `wait`; returns its address
+/// Looks for the sender with `device_id` for up to `wait`; returns its address
 /// and port. Blocking: run it off the async threads.
-pub fn find_mac(device_id: &str, wait: Duration) -> Option<(IpAddr, u16)> {
+pub fn find_sender(device_id: &str, wait: Duration) -> Option<(IpAddr, u16)> {
     let daemon = match ServiceDaemon::new() {
         Ok(d) => d,
         Err(e) => {
@@ -50,20 +50,20 @@ fn is_link_local(addr: &IpAddr) -> bool {
     }
 }
 
-/// An AV Relay Mac found on the network.
+/// An AV Relay sender found on the network.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FoundMac {
+pub struct FoundSender {
     pub name: String,
     pub address: IpAddr,
     pub port: u16,
     pub device_id: Option<String>,
 }
 
-/// Lists the AV Relay Macs that answer within `wait`, to offer them when
+/// Lists the AV Relay senders that answer within `wait`, to offer them when
 /// pairing. Blocking.
-pub fn browse(wait: Duration) -> Vec<FoundMac> {
+pub fn browse(wait: Duration) -> Vec<FoundSender> {
     let Ok(daemon) = ServiceDaemon::new() else { return Vec::new() };
-    let mut found: Vec<FoundMac> = Vec::new();
+    let mut found: Vec<FoundSender> = Vec::new();
     if let Ok(events) = daemon.browse(SERVICE) {
         let deadline = Instant::now() + wait;
         while let Some(left) = deadline.checked_duration_since(Instant::now()) {
@@ -73,14 +73,14 @@ pub fn browse(wait: Duration) -> Vec<FoundMac> {
             addrs.sort_by_key(|a| (!a.is_ipv4(), a.to_string()));
             let Some(address) = addrs.into_iter().find(|a| !is_link_local(a)) else { continue };
             let name = service.fullname.strip_suffix(&format!(".{SERVICE}")).unwrap_or(&service.fullname).replace("\\ ", " ");
-            let mac = FoundMac {
+            let sender = FoundSender {
                 name,
                 address,
                 port: service.get_port(),
                 device_id: service.get_property_val_str("id").map(str::to_owned),
             };
-            if !found.contains(&mac) {
-                found.push(mac);
+            if !found.contains(&sender) {
+                found.push(sender);
             }
         }
     }

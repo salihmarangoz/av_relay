@@ -1,12 +1,12 @@
 [Desktop Entry]
 Type=Application
 Name=AV Relay
-GenericName=MacBook Camera and Microphone
-Comment=Use your MacBook's camera and microphone on this computer
+GenericName=Camera and Microphone Relay
+Comment=Use another computer's camera and microphone on this one
 Exec=av-relay
 Icon=io.github.salihmarangoz.avrelay
 Terminal=false
 Categories=AudioVideo;Video;Audio;Network;
-Keywords=camera;webcam;microphone;mic;mac;macbook;video call;
+Keywords=camera;webcam;microphone;mic;relay;mac;macbook;video call;
 StartupNotify=true
 SingleMainWindow=true

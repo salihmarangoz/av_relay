@@ -149,6 +149,8 @@ nix::ioctl_write_ptr!(vidioc_subscribe_event, b'V', 90, v4l2_event_subscription)
 nix::ioctl_read!(loopback_ctl_version, b'~', 0, u32);
 // Returns the new device's number.
 nix::ioctl_write_ptr!(loopback_ctl_add, b'~', 1, v4l2_loopback_config);
+// Takes the device's number itself, not a pointer to it.
+nix::ioctl_write_int!(loopback_ctl_remove, b'~', 2);
 
 const _: () = {
     assert!(size_of::<v4l2_capability>() == 104);

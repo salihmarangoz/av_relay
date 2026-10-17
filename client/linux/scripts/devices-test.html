@@ -26,7 +26,7 @@
 <main>
   <h1>AV Relay device test</h1>
   <p>Opens a camera and a microphone the way a video call does. Pick
-  “MacBook Camera” and “MacBook Microphone”: the Mac's camera light and
+  “AV Relay Camera” and “AV Relay Microphone”: the sender's camera light and
   microphone indicator should come on, and go off about 3 seconds after you
   press Stop.</p>
 
@@ -60,7 +60,7 @@ async function listDevices() {
   const devices = await navigator.mediaDevices.enumerateDevices();
   // Before the first permission grant, browsers hide labels and IDs.
   labelsKnown = devices.some(d => d.label);
-  for (const [sel, kind, prefer] of [[$('cam'), 'videoinput', 'MacBook Camera'], [$('mic'), 'audioinput', 'MacBook Microphone']]) {
+  for (const [sel, kind, prefer] of [[$('cam'), 'videoinput', 'AV Relay Camera'], [$('mic'), 'audioinput', 'AV Relay Microphone']]) {
     const current = sel.value;
     sel.innerHTML = '';
     for (const d of devices.filter(d => d.kind === kind)) {

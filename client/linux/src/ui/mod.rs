@@ -33,6 +33,7 @@ pub enum UiEvent {
     SetVideo(VideoFormat),
     SetAutostart(bool),
     SetKeepDevices(bool),
+    SetEnabled(bool),
     /// The desktop's tray host appeared or went away.
     TrayAvailable(bool),
     Quit,
@@ -47,6 +48,9 @@ pub struct Ui {
     status: watch::Receiver<Status>,
     events: async_channel::Sender<UiEvent>,
     tray_available: std::cell::Cell<bool>,
+    /// "Enable AV Relay" as last chosen (in the tray or a window); the
+    /// status can lag behind it while a session winds down.
+    enabled: std::cell::Cell<bool>,
     pair_window: RefCell<Option<glib::WeakRef<adw::Window>>>,
     status_window: RefCell<Option<glib::WeakRef<adw::Window>>>,
 }
@@ -83,6 +87,7 @@ pub fn run() -> Result<()> {
         problems: core.problems().to_vec(),
         autostart: autostart::is_enabled(),
         keep_devices: settings.keep_devices,
+        enabled: settings.enabled,
         video: settings.video,
         events: ui_tx.clone(),
     };
@@ -111,6 +116,7 @@ pub fn run() -> Result<()> {
         status: status_rx,
         events: ui_tx.clone(),
         tray_available: std::cell::Cell::new(true),
+        enabled: std::cell::Cell::new(settings.enabled),
         pair_window: RefCell::default(),
         status_window: RefCell::default(),
     });
@@ -129,7 +135,7 @@ pub fn run() -> Result<()> {
         move |_| {
             // Launched from the app grid (or again while running): show
             // something. Not paired: the pairing window; else the status.
-            if ui.core.store().paired_mac().ok().flatten().is_none() {
+            if ui.core.store().paired_sender().ok().flatten().is_none() {
                 pair::show(&ui);
             } else {
                 status::show(&ui);
@@ -185,6 +191,23 @@ pub fn run() -> Result<()> {
                             async move { tray.update(|t| t.keep_devices = on).await }
                         });
                     }
+                    UiEvent::SetEnabled(on) => {
+                        ui.enabled.set(on);
+                        let store = ui.core.store();
+                        let mut s = store.settings().unwrap_or_default();
+                        if s.enabled != on {
+                            s.enabled = on;
+                            if let Err(e) = store.save_settings(&s) {
+                                log::error!("saving settings: {e:#}");
+                            }
+                            log::info!("AV Relay switched {}", if on { "on" } else { "off" });
+                            let _ = ui.commands.send(Command::EnabledChanged);
+                        }
+                        ui.rt.spawn({
+                            let tray = tray.clone();
+                            async move { tray.update(|t| t.enabled = on).await }
+                        });
+                    }
                     UiEvent::SetAutostart(on) => {
                         if let Err(e) = autostart::set(on) {
                             log::error!("start at login: {e:#}");
@@ -230,13 +253,13 @@ pub fn run() -> Result<()> {
 }
 
 fn confirm_forget(ui: &Rc<Ui>) {
-    let mac = match &*ui.status.borrow() {
-        Status::Searching { mac, .. } | Status::Connected { mac, .. } => mac.clone(),
+    let sender = match &*ui.status.borrow() {
+        Status::Searching { sender, .. } | Status::Connected { sender, .. } | Status::Disabled { sender: Some(sender) } => sender.clone(),
         _ => return,
     };
     let dialog = adw::AlertDialog::builder()
-        .heading(format!("Forget {mac}?"))
-        .body("The camera and microphone go away, and the Mac forgets this computer too if it's connected. To use them again, pair again.")
+        .heading(format!("Forget {sender}?"))
+        .body("The camera and microphone go away, and the sender forgets this computer too if it's connected. To use them again, pair again.")
         .build();
     dialog.add_responses(&[("cancel", "Cancel"), ("forget", "Forget")]);
     dialog.set_response_appearance("forget", adw::ResponseAppearance::Destructive);

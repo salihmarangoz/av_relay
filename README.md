@@ -4,55 +4,44 @@
 
 <h1 align="center">AV Relay</h1>
 
-<p align="center">Use your MacBook's camera and microphone on your Ubuntu computer.</p>
+<p align="center">Use one computer's camera and microphone on another.</p>
 
-AV Relay turns a MacBook into a webcam and microphone for a Linux PC on the
-same network. On Ubuntu they show up as **MacBook Camera** and **MacBook
-Microphone**, like any USB webcam, so every app can use them: Firefox,
-Chrome, Discord, Zoom, OBS, …
+AV Relay has two sides. The **sender** shares its camera and microphone. The
+**receiver** shows them as an ordinary webcam and microphone, **AV Relay
+Camera** and **AV Relay Microphone**, so every app can use them: Firefox,
+Chrome, Discord, Zoom, OBS, … Today the sender runs on a Mac and the receiver
+on Ubuntu, on the same network.
 
-- **On demand.** The Mac's camera and microphone run only while an app on
-  Ubuntu uses them. Close the call and the Mac's camera light goes out.
-- **Pair once.** A 6-digit code shown on the Mac, typed on Ubuntu. After
-  that the two find each other on their own, even if the Mac's address
+- **On demand.** The sender's camera and microphone run only while an app on
+  the receiver uses them. Close the call and the camera light goes out.
+- **Pair once.** A 6-digit code shown on the sender, typed on the receiver.
+  After that the two find each other on their own, even if an address
   changes.
 - **Private.** Nothing leaves your network: no account, no cloud. Everything
   between the two computers is encrypted end to end.
-- **Out of the way.** It starts at login and lives in the menu bar on the Mac
-  and in the top bar on Ubuntu. While the Mac is connected, its microphone is
-  Ubuntu's default input; when it goes away, your previous one comes back.
+- **Out of the way.** Both start at login and live in the menu bar or top
+  bar. While the sender is connected, its microphone is the receiver's
+  default input; when it goes away, your previous one comes back.
 
-## How it works
+## Pick your installation
 
-```
- MacBook (server)                                  Ubuntu (client)
- ─────────────────                                 ───────────────────────────────
- camera ─┐                                          ┌─► "MacBook Camera"  (webcam)
-         ├─ H.264 / Opus ── WebRTC over your LAN ───┤
- mic ────┘     encrypted, paired with a code        └─► "MacBook Microphone" (input)
-```
+Install the **sender** on the computer whose camera and microphone you want
+to use, and the **receiver** on the computer where you want them.
 
-When an app on Ubuntu opens the camera or the microphone, AV Relay asks the
-Mac to start it; when the app lets go, the Mac stops a few seconds later.
-Video is H.264, encoded in hardware on the Mac (up to 1080p at 30 fps); audio
-is Opus. The details are in [docs/architecture.md](docs/architecture.md) and
-the wire protocol in [docs/protocol.md](docs/protocol.md).
+| Your computer | Sender: shares its camera and microphone | Receiver: uses them as a webcam and microphone |
+|---|---|---|
+| **macOS** 14 or newer | [Install the sender](#sender-on-macos) | Not yet |
+| **Ubuntu** 24.04 | Not yet | [Install the receiver](#receiver-on-ubuntu) |
+| **Windows** | Not yet | Not yet ([notes](client/windows/README.md)) |
 
-## What you need
+Download from the [latest release](../../releases/latest). Then
+[pair the two](#pair).
 
-- A Mac with **macOS 14** or newer.
-- A PC with **Ubuntu 24.04** (GNOME). Other recent Linux desktops with
-  PipeWire may work too, but aren't tested.
-- Both on the **same network** (Wi-Fi is fine).
-- On Ubuntu, the **v4l2loopback** kernel module, version 0.13 or newer. With
-  Ubuntu's HWE kernel (the default on 24.04.2 and later) it's one package;
-  see below.
+## Sender
 
-## Install
+### Sender on macOS
 
-Download both apps from the [latest release](../../releases/latest).
-
-### On the Mac
+You need macOS 14 or newer.
 
 1. Open `AV-Relay-<version>-macOS.dmg` and drag **AV Relay** to
    **Applications**. (Start it from Applications: the login item remembers
@@ -62,11 +51,17 @@ Download both apps from the [latest release](../../releases/latest).
    Settings → Privacy & Security** and click **Open Anyway**.
 3. AV Relay appears in the menu bar and turns **Open at Login** on. When
    macOS asks whether it may use the **local network**, allow it; it asks for
-   camera and microphone permission the first time Ubuntu uses them.
+   camera and microphone permission the first time a receiver uses them.
 
-More in [docs/macos.md](docs/macos.md).
+More, including troubleshooting: [docs/macos.md](docs/macos.md).
 
-### On Ubuntu
+## Receiver
+
+### Receiver on Ubuntu
+
+You need Ubuntu 24.04 (GNOME) and the **v4l2loopback** kernel module, version
+0.13 or newer. With Ubuntu's HWE kernel (the default on 24.04.2 and later)
+that's one extra package:
 
 ```
 sudo apt install ./av-relay_<version>_amd64.deb linux-modules-v4l2loopback-generic-hwe-24.04
@@ -77,49 +72,71 @@ shows its icon in the top bar. To start it right away, open **AV Relay** from
 the app grid.
 
 Not on the HWE kernel, or the camera says it's unavailable? See
-[docs/linux.md](docs/linux.md#the-virtual-camera-needs-v4l2loopback).
+[docs/linux.md](docs/linux.md#the-virtual-camera-needs-v4l2loopback). Other
+recent Linux desktops with PipeWire may work too, but aren't tested.
+
+More, including troubleshooting: [docs/linux.md](docs/linux.md).
 
 ## Pair
 
-1. **On the Mac:** click the AV Relay icon in the menu bar → **Allow
+1. **On the sender:** click the AV Relay icon in the menu bar → **Allow
    Pairing…**. It shows a 6-digit code, its address and its port.
-2. **On Ubuntu:** click the AV Relay icon in the top bar → **Pair with a
-   Mac…**. Pick your Mac from the list (or type its address and port), click
-   **Continue**, and type the code.
+2. **On the receiver:** click the AV Relay icon in the top bar → **Pair with
+   a sender…**. Under **Auto-discovery**, pick the sender (or type its
+   address and port under **Manual**), click **Continue**, and type the code.
 
-That's it. The Mac's pairing window closes on its own, and from now on the
-two connect by themselves whenever both are on.
+That's it. The sender's pairing window then shows **Paired with** and the
+receiver's name; from now on the two connect by themselves whenever both
+are on. A receiver uses one
+sender; a sender can be paired with several receivers and serves one at a
+time.
 
 ## Use
 
-In your app's settings, choose **MacBook Camera** and **MacBook Microphone**.
-The microphone is already the default input while the Mac is connected; most
-apps remember the camera you chose.
+In your app's settings, choose **AV Relay Camera** and **AV Relay
+Microphone**. The microphone is already the default input while the sender
+is connected; most apps remember the camera you chose.
 
-If the Mac drops off (sleep, Wi-Fi), the camera and microphone stay for 5
-minutes, the camera showing a "Waiting for your Mac" picture, so a short drop
+If the sender drops off (sleep, Wi-Fi), the camera and microphone stay for 5
+minutes, the camera showing a "Waiting for …" picture, so a short drop
 doesn't break your call. Turn on **Keep virtual devices on** to keep them for
 good.
 
-The top bar menu shows whether the Mac is connected and whether the camera and
-microphone are in use. From it you can also pick the camera quality (1080p or
-720p), keep the virtual devices on, turn **Start at login** off, pair another
-Mac, or forget this one.
+Each side's menu shows whether they're connected and whether the camera and
+microphone are in use. **Enable AV Relay** at the top switches a side off
+without quitting it, as if it were closed, and back on. On the receiver you
+can also pick the camera quality (1080p or 720p), turn **Start at login**
+off, pair with a different sender, or forget this one.
 
-## Troubleshooting
+## How it works
 
-- [Ubuntu: the camera is missing, the Mac isn't found, no top-bar icon, …](docs/linux.md#troubleshooting)
-- [Mac: permissions, Open Anyway, the menu bar, …](docs/macos.md)
+```
+ sender (server)                                    receiver (client)
+ ─────────────────                                  ───────────────────────────────
+ camera ─┐                                          ┌─► "AV Relay Camera"      (webcam)
+         ├─ H.264 / Opus ── WebRTC over your LAN ───┤
+ mic ────┘     encrypted, paired with a code        └─► "AV Relay Microphone"  (input)
+```
+
+When an app on the receiver opens the camera or the microphone, AV Relay asks
+the sender to start it; when the app lets go, the sender stops a few seconds
+later. Video is H.264, encoded in hardware on the Mac (up to 1080p at 30
+fps); audio is Opus. Over Wi-Fi the receiver keeps a small buffer that grows
+when the network stalls, and holds the picture back by the same amount, so
+sound stays smooth and in step with the picture. The details are in
+[docs/architecture.md](docs/architecture.md) and the wire protocol in
+[docs/protocol.md](docs/protocol.md).
 
 ## Tested on
 
-Ubuntu 24.04 and a MacBook Air (M4) with macOS 27, over Wi-Fi.
+A MacBook Air (M4) with macOS 27 as the sender and Ubuntu 24.04 as the
+receiver, over Wi-Fi.
 
 ## Building from source
 
-- Ubuntu app: [client/linux](client/linux) (Rust) and
+- Sender for macOS: [server/macos](server/macos) (Swift)
+- Receiver for Linux: [client/linux](client/linux) (Rust) and
   [docs/linux.md](docs/linux.md#building-from-source)
-- Mac app: [server/macos](server/macos) (Swift)
 - Both follow [docs/protocol.md](docs/protocol.md) and test against the shared
   vectors in [tests/vectors](tests/vectors).
 

@@ -14,6 +14,7 @@ pub struct Tray {
     pub problems: Vec<String>,
     pub autostart: bool,
     pub keep_devices: bool,
+    pub enabled: bool,
     pub video: VideoFormat,
     pub events: async_channel::Sender<UiEvent>,
 }
@@ -23,9 +24,9 @@ impl Tray {
         let _ = self.events.try_send(event);
     }
 
-    fn mac_name(&self) -> Option<&str> {
+    fn sender_name(&self) -> Option<&str> {
         match &self.status {
-            Status::Searching { mac, .. } | Status::Connected { mac, .. } => Some(mac),
+            Status::Searching { sender, .. } | Status::Connected { sender, .. } | Status::Disabled { sender: Some(sender) } => Some(sender),
             _ => None,
         }
     }
@@ -33,9 +34,10 @@ impl Tray {
     fn headline(&self) -> String {
         match &self.status {
             Status::Starting => "Starting…".into(),
-            Status::NotPaired { .. } => "Not paired with a Mac".into(),
-            Status::Searching { mac, .. } => format!("Looking for {mac}…"),
-            Status::Connected { mac, .. } => format!("Connected to {mac}"),
+            Status::NotPaired { .. } => "Not paired with a sender".into(),
+            Status::Searching { sender, .. } => format!("Looking for {sender}…"),
+            Status::Connected { sender, .. } => format!("Connected to {sender}"),
+            Status::Disabled { .. } => "Off: no virtual camera or microphone".into(),
         }
     }
 
@@ -43,20 +45,21 @@ impl Tray {
         match &self.status {
             Status::Connected { camera, mic, .. } if camera.used_here || mic.used_here => "live",
             Status::Connected { .. } => "on",
+            Status::Disabled { .. } => "disabled",
             _ => "off",
         }
     }
 }
 
-/// "Camera: in use", "Microphone: ready", "Camera: in use (Mac: no permission)".
+/// "Camera: in use", "Microphone: ready", "Camera: in use (sender: no permission)".
 fn device_line(what: &str, d: &Device) -> String {
-    let mac = match (d.state, d.error.as_deref()) {
-        (Some(CaptureState::Error), Some(err)) => format!(" (Mac: {})", err.replace('-', " ")),
-        (Some(CaptureState::Error), None) => " (Mac: error)".into(),
+    let sender = match (d.state, d.error.as_deref()) {
+        (Some(CaptureState::Error), Some(err)) => format!(" (sender: {})", err.replace('-', " ")),
+        (Some(CaptureState::Error), None) => " (sender: error)".into(),
         (Some(CaptureState::Starting), _) if d.used_here => " (starting…)".into(),
         _ => String::new(),
     };
-    format!("{what}: {}{mac}", if d.used_here { "in use" } else { "ready" })
+    format!("{what}: {}{sender}", if d.used_here { "in use" } else { "ready" })
 }
 
 impl ksni::Tray for Tray {
@@ -96,6 +99,19 @@ impl ksni::Tray for Tray {
         use ksni::menu::*;
         let mut items: Vec<ksni::MenuItem<Self>> = Vec::new();
         let info = |label: String| StandardItem { label, enabled: false, ..Default::default() }.into();
+        items.push(
+            CheckmarkItem {
+                label: "Enable AV Relay".into(),
+                checked: self.enabled,
+                activate: Box::new(|t: &mut Self| {
+                    t.enabled = !t.enabled;
+                    t.send(UiEvent::SetEnabled(t.enabled));
+                }),
+                ..Default::default()
+            }
+            .into(),
+        );
+        items.push(MenuItem::Separator);
         items.push(info(self.headline()));
         if let Status::Searching { last_error: Some(e), .. } = &self.status {
             items.push(info(shorten(e, 60)));
@@ -122,19 +138,21 @@ impl ksni::Tray for Tray {
         }
         items.push(MenuItem::Separator);
 
-        let paired = !matches!(self.status, Status::NotPaired { .. } | Status::Starting);
+        let paired = !matches!(self.status, Status::NotPaired { .. } | Status::Starting | Status::Disabled { sender: None });
         items.push(
             StandardItem {
-                label: if paired { "Pair with another Mac…".into() } else { "Pair with a Mac…".into() },
+                label: if paired { "Pair with a different sender…".into() } else { "Pair with a sender…".into() },
+                // Off is as if closed: no pairing either (like the sender).
+                enabled: !matches!(self.status, Status::Disabled { .. }),
                 activate: Box::new(|t: &mut Self| t.send(UiEvent::OpenPair)),
                 ..Default::default()
             }
             .into(),
         );
-        if let Some(mac) = self.mac_name() {
+        if let Some(sender) = self.sender_name() {
             items.push(
                 StandardItem {
-                    label: format!("Forget {mac}…"),
+                    label: format!("Forget {sender}…"),
                     activate: Box::new(|t: &mut Self| t.send(UiEvent::ConfirmForget)),
                     ..Default::default()
                 }
@@ -200,7 +218,7 @@ impl ksni::Tray for Tray {
     }
 }
 
-/// "Camera and microphone stay until 11:23" while the Mac is away.
+/// "Camera and microphone stay until 11:23" while the sender is away.
 pub fn hold_line(hold: Hold) -> Option<String> {
     match hold {
         Hold::None => None,

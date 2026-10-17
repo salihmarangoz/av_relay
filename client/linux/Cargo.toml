@@ -3,7 +3,7 @@ name = "av-relay"
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
-description = "Use a MacBook's camera and microphone on Ubuntu as a virtual webcam and mic"
+description = "Use another computer's camera and microphone on Ubuntu as a virtual webcam and mic"
 repository = "https://github.com/salihmarangoz/av_relay_mac_to_linux"
 publish = false
 
@@ -56,10 +56,11 @@ license-file = ["../../LICENSE", "0"]
 section = "video"
 priority = "optional"
 extended-description = """\
-AV Relay makes a MacBook's camera and microphone show up on Ubuntu as a \
-regular webcam ("MacBook Camera") and microphone ("MacBook Microphone") for \
-any app, over the local network. The Mac's camera and microphone run only \
-while an app here uses them. The Mac side is the AV Relay app for macOS."""
+AV Relay makes the camera and microphone of another computer, the sender, \
+show up on Ubuntu as a regular webcam ("AV Relay Camera") and microphone \
+("AV Relay Microphone") for any app, over the local network. The sender's \
+camera and microphone run only while an app here uses them. The sender is \
+the AV Relay app for macOS."""
 depends = "$auto, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-libav, gstreamer1.0-nice, pipewire, wireplumber, kmod"
 recommends = "gnome-shell-extension-appindicator"
 suggests = "linux-modules-v4l2loopback-generic-hwe-24.04, v4l2loopback-utils"
