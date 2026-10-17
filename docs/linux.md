@@ -121,13 +121,15 @@ tree: `client/linux/scripts/devices-test.html`), click **Start**, and pick
 size and frame rate, and a level meter for the microphone.
 
 **Sound or picture drops out now and then.** Usually that's Wi-Fi: a
-computer's Wi-Fi can go quiet for 0.1-0.3 seconds (Macs do it every so
-often, e.g. for AirDrop and Continuity). AV Relay rides it out: after a
+Wi-Fi network can go quiet for 0.1-0.3 seconds now and then (some routers
+do it every 20-30 seconds). AV Relay rides it out: after a
 dropout it keeps more sound buffered (up to 0.2 seconds) for a while, holds
 the picture back just as long so lips stay in sync, asks the Mac to resend
 lost video, and lets the buffer shrink again once the network is calm. For
 fewer dropouts, bring the Mac closer to the router or use a cable on either
-side.
+side. To see whether it's the network, ping the router from either
+computer for a minute (`ping -c 60 <router address>`) and look for
+replies slower than 100 ms.
 
 **Logs:** started from the app grid or at login, AV Relay logs to the
 journal:

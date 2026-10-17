@@ -143,7 +143,8 @@ impl Playout {
             queue.pop_slice(&mut old);
             counters.skipped_frames.fetch_add((avail - target) as u64, Ordering::Relaxed);
             queue.skip(avail - target - FADE);
-            avail = target - FADE;
+            // FADE old frames are in hand, and the queue now holds `target`.
+            avail = target;
             crossfade = Some(old);
         }
 
@@ -283,6 +284,21 @@ mod tests {
         assert!(c.skipped_frames.load(Ordering::Relaxed) > 0);
         // At most 60 ms (MAX_EXCESS) plus a chunk arriving whole.
         assert!(most_above <= CHUNK * 4, "{most_above} frames above the target");
+    }
+
+    #[test]
+    fn after_a_crossfaded_drop_the_books_match_the_queue() {
+        let (mut prod, mut cons) = HeapRb::<f32>::new(RATE as usize).split();
+        let counters = MicCounters::default();
+        let mut playout = Playout::default();
+        let quantum = 1024usize;
+        let mut out = vec![0.0; quantum];
+        prod.push_iter(std::iter::repeat_n(0.1, playout.target(quantum)));
+        playout.fill(&mut cons, &mut out, &counters);
+        prod.push_iter(std::iter::repeat_n(0.1, CHUNK * 10));
+        let error = playout.fill(&mut cons, &mut out, &counters).unwrap();
+        assert_eq!(playout.left, cons.occupied_len());
+        assert_eq!(error, 0.0);
     }
 
     #[test]
