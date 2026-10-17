@@ -11,7 +11,8 @@ Output (assets/generated/):
 - app-icon.svg, app-icon-<N>.png: the full-colour icon (rounded square)
 - AppIcon.iconset/ and AppIcon.icns: the same for macOS
 - linux/hicolor/...: the app icon plus symbolic tray icons for three states
-  (off: lens only; on: lens and arcs; live: filled lens and arcs)
+  (off: lens only; on: lens and arcs; live: filled lens and arcs), and an
+  index.theme so a source tree can use them as a theme
 - macos-menubar/: black template images for the menu bar, same three states
 
 Everything is drawn at 4x and scaled down, so it doesn't depend on any SVG
@@ -248,6 +249,19 @@ def build():
         # Bitmaps for trays that don't recolour symbolic SVGs (white on dark panels).
         for n in (22, 44):
             files[f"{hi}/{n}x{n}/status/{APP_ID}-{state}.png"] = png_bytes(render_glyph(state, n, (255, 255, 255)))
+
+    # A theme index, so a source tree's icons work as a theme in an extra
+    # search path (GTK recolours symbolic icons only when found through a
+    # theme, not as loose files). Installed, the system's hicolor has one.
+    dirs = ["symbolic/apps", "scalable/apps"] + [f"{n}x{n}/apps" for n in (16, 32, 48, 64, 128, 256, 512)] + ["22x22/status", "44x44/status"]
+    index = "[Icon Theme]\nName=Hicolor\nComment=AV Relay icons from a source tree\nDirectories=" + ",".join(dirs) + "\n"
+    for d in dirs:
+        if d.startswith(("symbolic", "scalable")):
+            index += f"\n[{d}]\nSize=16\nMinSize=8\nMaxSize=512\nType=Scalable\n"
+        else:
+            n = int(d.split("x")[0])
+            index += f"\n[{d}]\nSize={n}\nType=Fixed\n"
+    files[f"{hi}/index.theme"] = index.encode()
 
     # macOS menu bar: template images (black + alpha; macOS tints them).
     for state in ("off", "on", "live"):
