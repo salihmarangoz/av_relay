@@ -1,5 +1,5 @@
 //! Developer commands for testing parts of the client on their own:
-//! the virtual camera, pairing, and a session against a real Mac.
+//! the virtual camera, pairing, and a session against a real sender.
 
 use std::io::Write;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -11,7 +11,7 @@ use crate::audio::{self, PipeWire};
 use crate::media::{MediaEvent, Receiver, Sinks};
 use crate::proto::pairing::{self, ClientInfo};
 use crate::proto::{ClientMsg, DEFAULT_PORT, ServerMsg, VideoFormat, session};
-use crate::store::{PairedMac, Store, hex_encode};
+use crate::store::{PairedSender, Store, hex_encode};
 use crate::vcam;
 
 /// Shows a moving test pattern on the virtual camera and logs when apps
@@ -49,7 +49,7 @@ fn fill_test_pattern(frame: &mut [u8], format: vcam::CameraFormat, t: f32) {
 }
 
 /// `vmic-test [SECONDS] [--default] [--drift PPM]`: plays a 440 Hz tone
-/// into the virtual microphone, by default 200 ppm fast like a drifting Mac
+/// into the virtual microphone, by default 200 ppm fast like a drifting sender
 /// clock, and logs when apps start and stop recording. With --default it is
 /// the default input meanwhile, and the previous default comes back at the
 /// end.
@@ -103,7 +103,7 @@ pub fn vmic_test(args: &[String]) -> Result<()> {
 
 /// `media-test [SECONDS]`: a local GStreamer WebRTC sender (moving ball,
 /// 720p H.264, and a 440 Hz Opus tone) talks to the real receiver, which
-/// feeds the virtual camera (1080p) and microphone: everything but the Mac.
+/// feeds the virtual camera (1080p) and microphone: everything but the sender.
 pub fn media_test(args: &[String]) -> Result<()> {
     use gstreamer as gst;
     use gstreamer::prelude::*;
@@ -213,7 +213,7 @@ pub fn media_test(args: &[String]) -> Result<()> {
         }
     });
     sender.set_state(gst::State::Playing)?;
-    // The Mac's m-sections are sendonly.
+    // The sender's m-sections are sendonly.
     for i in 0..2 {
         if let Some(t) = send.emit_by_name::<Option<gst_webrtc::WebRTCRTPTransceiver>>("get-transceiver", &[&(i as i32)]) {
             t.set_property("direction", gst_webrtc::WebRTCRTPTransceiverDirection::Sendonly);
@@ -264,7 +264,7 @@ pub fn media_test(args: &[String]) -> Result<()> {
 }
 
 /// `answer-test OFFER.sdp`: prints the answer the receiver gives to an
-/// offer (e.g. one the Mac logged), without any network.
+/// offer (e.g. one the sender logged), without any network.
 pub fn answer_test(args: &[String]) -> Result<()> {
     let Some(path) = args.first() else { bail!("usage: av-relay answer-test OFFER.sdp") };
     let offer = std::fs::read_to_string(path)?;
@@ -304,7 +304,7 @@ fn split_host_port(target: &str) -> Result<(String, u16)> {
     }
 }
 
-/// `pair HOST[:PORT] [CODE]`: pairs with a Mac and saves it.
+/// `pair HOST[:PORT] [CODE]`: pairs with a sender and saves it.
 pub fn pair(args: &[String]) -> Result<()> {
     let Some(target) = args.first() else { bail!("usage: av-relay pair HOST[:PORT] [CODE]") };
     let (host, port) = split_host_port(target)?;
@@ -320,7 +320,7 @@ pub fn pair(args: &[String]) -> Result<()> {
         let code = match args.get(1) {
             Some(c) => c.clone(),
             None => {
-                print!("Code shown on the Mac: ");
+                print!("Code shown on the sender: ");
                 std::io::stdout().flush()?;
                 let mut line = String::new();
                 std::io::stdin().read_line(&mut line)?;
@@ -329,7 +329,7 @@ pub fn pair(args: &[String]) -> Result<()> {
         };
         let server = attempt.finish(code.trim(), &me, &client_info()).await?;
         let paired_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-        store.save_paired_mac(&PairedMac {
+        store.save_paired_sender(&PairedSender {
             public_key: hex_encode(&server.public_key),
             device_id: server.device_id.clone(),
             name: server.name.clone(),
@@ -342,18 +342,18 @@ pub fn pair(args: &[String]) -> Result<()> {
     })
 }
 
-/// `session-test [SECONDS]`: opens a session with the paired Mac, asks for
-/// the camera and then the microphone, and prints what the Mac says.
+/// `session-test [SECONDS]`: opens a session with the paired sender, asks for
+/// the camera and then the microphone, and prints what the sender says.
 pub fn session_test(args: &[String]) -> Result<()> {
     let seconds: u64 = args.first().map(|s| s.parse()).transpose()?.unwrap_or(12);
     let store = Store::open_default()?;
     let me = store.identity()?;
-    let mac = store.paired_mac()?.context("no paired Mac; run `av-relay pair HOST` first")?;
+    let sender = store.paired_sender()?.context("no paired sender; run `av-relay pair HOST` first")?;
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     rt.block_on(async {
-        let stream = TcpStream::connect((mac.address.as_str(), mac.port)).await?;
+        let stream = TcpStream::connect((sender.address.as_str(), sender.port)).await?;
         stream.set_nodelay(true)?;
-        let (mut reader, mut writer) = session::connect(stream, &me, &mac.key()?).await?;
+        let (mut reader, mut writer) = session::connect(stream, &me, &sender.key()?).await?;
         let info = client_info();
         writer
             .send(&ClientMsg::Hello { name: info.name, app: info.app, video: VideoFormat { width: 1280, height: 720, fps: 30 } })

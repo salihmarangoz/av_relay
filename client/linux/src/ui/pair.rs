@@ -88,7 +88,7 @@ fn build(ui: &Rc<Ui>) -> adw::Window {
     let address_page = page();
     address_page.append(&label("Pair with a sender", &["title-2"]));
     address_page.append(&label(
-        "On the sender, the Mac whose camera and microphone you want to use, choose Allow Pairing… in AV Relay's menu bar menu. It shows a code.",
+        "On the sender, the computer whose camera and microphone you want to use, choose Allow Pairing… in AV Relay's menu. It shows a code.",
         &["dim-label"],
     ));
     let views = adw::ViewStack::new();
@@ -135,7 +135,7 @@ fn build(ui: &Rc<Ui>) -> adw::Window {
     let code_page = page();
     code_page.append(&label("Enter the code", &["title-2"]));
     code_page.append(&label(
-        "Type the 6-digit code the Mac shows. Each code works once and only while the Mac's pairing window is open.",
+        "Type the 6-digit code the sender shows. Each code works once and only while the sender's pairing window is open.",
         &["dim-label"],
     ));
     let code = gtk::Entry::builder()
@@ -196,13 +196,13 @@ fn build(ui: &Rc<Ui>) -> adw::Window {
             let (list, senders, refresh, views, update_next) =
                 (list.clone(), senders.clone(), refresh.clone(), views.clone(), update_next.clone());
             glib::spawn_future_local(async move {
-                let macs = handle.await.unwrap_or_default();
+                let found = handle.await.unwrap_or_default();
                 list.remove_all();
                 refresh.set_sensitive(true);
-                if macs.is_empty() {
+                if found.is_empty() {
                     let none = adw::ActionRow::builder()
                         .title("No sender found")
-                        .subtitle("Check that Allow Pairing… is open on it, or type its address.")
+                        .subtitle("Check that AV Relay runs and is switched on there, on the same network, or type its address.")
                         .activatable(false)
                         .selectable(false)
                         .build();
@@ -212,17 +212,17 @@ fn build(ui: &Rc<Ui>) -> adw::Window {
                     list.append(&none);
                     return;
                 }
-                for mac in macs {
+                for sender in found {
                     let row = adw::ActionRow::builder()
-                        .title(glib::markup_escape_text(&mac.name))
-                        .subtitle(format!("{}:{}", mac.address, mac.port))
+                        .title(glib::markup_escape_text(&sender.name))
+                        .subtitle(format!("{}:{}", sender.address, sender.port))
                         .build();
                     row.add_prefix(&gtk::Image::from_icon_name("computer-symbolic"));
                     let check = gtk::Image::from_icon_name("object-select-symbolic");
                     check.set_visible(false);
                     row.add_suffix(&check);
                     list.append(&row);
-                    senders.borrow_mut().push(Found { host: mac.address.to_string(), port: mac.port, check });
+                    senders.borrow_mut().push(Found { host: sender.address.to_string(), port: sender.port, check });
                 }
                 // One sender: nothing to choose.
                 if senders.borrow().len() == 1 {
@@ -253,11 +253,16 @@ fn build(ui: &Rc<Ui>) -> adw::Window {
         move |_| update_next()
     });
 
+    // Enter or a double-click can come again while connecting: one at a time.
+    let connecting = Rc::new(std::cell::Cell::new(false));
     let start = {
         let (ui, stack, pending, address, port, err, spinner, next, code) =
             (ui.clone(), stack.clone(), pending.clone(), address.clone(), port.clone(), address_error.clone(), spinner.clone(), next.clone(), code.clone());
-        let (views, list, senders) = (views.clone(), list.clone(), senders.clone());
+        let (views, list, senders, connecting) = (views.clone(), list.clone(), senders.clone(), connecting.clone());
         move || {
+            if connecting.get() {
+                return;
+            }
             let (host, port_nr) = if views.visible_child_name().as_deref() == Some("manual") {
                 let host = address.text().trim().to_string();
                 let Ok(port_nr) = port.text().trim().parse::<u16>() else {
@@ -279,15 +284,18 @@ fn build(ui: &Rc<Ui>) -> adw::Window {
             };
             err.set_visible(false);
             next.set_sensitive(false);
+            connecting.set(true);
             spinner.start();
             let handle = ui.rt.spawn({
                 let host = host.clone();
                 async move { app::start_pairing(&host, port_nr).await }
             });
-            let (stack, pending, err, spinner, next, code) = (stack.clone(), pending.clone(), err.clone(), spinner.clone(), next.clone(), code.clone());
+            let (stack, pending, err, spinner, next, code, connecting) =
+                (stack.clone(), pending.clone(), err.clone(), spinner.clone(), next.clone(), code.clone(), connecting.clone());
             glib::spawn_future_local(async move {
                 let result = handle.await;
                 spinner.stop();
+                connecting.set(false);
                 next.set_sensitive(true);
                 match result {
                     Ok(Ok(attempt)) => {
@@ -346,13 +354,13 @@ fn build(ui: &Rc<Ui>) -> adw::Window {
                     Ok(Ok(name)) => {
                         done.set_title(&format!("Paired with {name}"));
                         done.set_description(Some(&format!(
-                            "“MacBook Camera” and “MacBook Microphone” are here whenever {} is reachable. Pick them in your apps.",
+                            "“AV Relay Camera” and “AV Relay Microphone” are here whenever {} is reachable. Pick them in your apps.",
                             glib::markup_escape_text(&name)
                         )));
                         stack.set_visible_child_name("done");
                         let _ = ui.commands.send(Command::Paired);
                     }
-                    // The code is used up either way: start again from the Mac.
+                    // The code is used up either way: start again from the sender.
                     Ok(Err(e)) => {
                         stack.set_visible_child_name("address");
                         show_error(&address_err, &format!("{e:#}"));
@@ -389,7 +397,7 @@ fn build(ui: &Rc<Ui>) -> adw::Window {
         }
     });
     win.connect_close_request(move |_| {
-        // Closing mid-pairing hangs up. Before the code was sent, the Mac's
+        // Closing mid-pairing hangs up. Before the code was sent, the sender's
         // code stays valid; after, it's used up either way.
         pending.borrow_mut().take();
         glib::Propagation::Proceed

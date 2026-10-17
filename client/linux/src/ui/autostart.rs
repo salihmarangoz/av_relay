@@ -66,7 +66,7 @@ fn set_at(system: &Path, path: &Path, enabled: bool) -> Result<()> {
                 "[Desktop Entry]\n\
                  Type=Application\n\
                  Name=AV Relay\n\
-                 Comment=Use your MacBook's camera and microphone\n\
+                 Comment=Use another computer's camera and microphone\n\
                  Exec={command}\n\
                  Icon={APP_ID}\n\
                  Terminal=false\n\

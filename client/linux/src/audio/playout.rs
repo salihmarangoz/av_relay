@@ -35,7 +35,7 @@ const HOLD: usize = RATE as usize * 30;
 /// ...then shrinks by this fraction of the time played (1 ms per second, a
 /// 0.1% speed-up for the resampler).
 const DECAY: f64 = 0.001;
-/// A gap longer than this isn't a network stall (the Mac's mic stopped, say):
+/// A gap longer than this isn't a network stall (the sender's mic stopped, say):
 /// starting again doesn't grow the margin.
 const MAX_STALL: usize = RATE as usize;
 /// Beyond the target by more than this, drop the excess at once,

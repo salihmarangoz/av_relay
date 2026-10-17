@@ -1,9 +1,9 @@
-//! Receiving the Mac's media (docs/protocol.md, section 8): a WebRTC peer
+//! Receiving the sender's media (docs/protocol.md, section 8): a WebRTC peer
 //! connection through GStreamer's webrtcbin, always the answerer, with the
 //! H.264 video decoded into the virtual camera's format and the Opus audio
 //! into the virtual microphone's.
 //!
-//! Signaling goes through the control channel: the caller feeds the Mac's
+//! Signaling goes through the control channel: the caller feeds the sender's
 //! offers and ICE candidates in and sends out what comes back as
 //! [`MediaEvent`]s.
 
@@ -37,9 +37,9 @@ const KEYFRAME_REQUEST_EVERY: Duration = Duration::from_millis(500);
 
 #[derive(Debug)]
 pub enum MediaEvent {
-    /// The answer to the latest offer: send it to the Mac.
+    /// The answer to the latest offer: send it to the sender.
     Answer(String),
-    /// A local ICE candidate: send it to the Mac.
+    /// A local ICE candidate: send it to the sender.
     Candidate(IceCandidate),
     /// The peer connection's state changed (new, connecting, connected,
     /// disconnected, failed, closed).
@@ -248,13 +248,13 @@ impl Receiver {
         Ok(Self { pipeline, webrtc, video: video_t, audio: audio_t, events, rtpbin, streams })
     }
 
-    /// Takes the Mac's offer and answers it (the answer comes back as
+    /// Takes the sender's offer and answers it (the answer comes back as
     /// [`MediaEvent::Answer`]).
     pub fn handle_offer(&self, sdp: &str) -> Result<()> {
         log::debug!("offer:\n{sdp}");
         let offer = gst_sdp::SDPMessage::parse_buffer(sdp.as_bytes()).map_err(|_| anyhow!("the offer isn't valid SDP"))?;
         // webrtcbin answers only the header extensions its codec preferences
-        // list, and without transport-cc the Mac's congestion control (GCC)
+        // list, and without transport-cc the sender's congestion control (GCC)
         // can't see queueing delay. Echo the offer's transport-cc ids.
         let twcc = |kind: &str| twcc_id(&offer, kind);
         self.video.set_property("codec-preferences", video_caps(twcc("video")));
@@ -335,7 +335,7 @@ impl Receiver {
         }
     }
 
-    /// Adds one of the Mac's ICE candidates; an empty candidate ends them.
+    /// Adds one of the sender's ICE candidates; an empty candidate ends them.
     pub fn add_candidate(&self, c: &IceCandidate) {
         if c.candidate.is_empty() {
             return;
@@ -390,7 +390,7 @@ fn remote_description_set(
 /// regular RTCP report from the last RTCP packet of any kind, and only
 /// regular reports carry report blocks. TWCC feedback goes out as early RTCP
 /// on every video frame, far more often than the regular interval (~0.7 s),
-/// so regular reports, and with them the Mac's loss and RTT figures, never
+/// so regular reports, and with them the sender's loss and RTT figures, never
 /// came. Sending TWCC on a fixed 50 ms interval (as libwebrtc's own receiver
 /// does at these bitrates) and allowing regular reports every 40 ms lets
 /// them interleave: ~26 reports a second with report blocks, ~40 kbit/s of
@@ -484,7 +484,7 @@ fn h264_profiles(offer: &gst_sdp::SDPMessageRef) -> Vec<(String, String)> {
 
 /// The H.264 fmtp of the answer must say what this client can receive:
 /// the offered profile at level 5.1 (protocol.md 8.2), and
-/// level-asymmetry-allowed=1 so the Mac may send at that level whatever
+/// level-asymmetry-allowed=1 so the sender may send at that level whatever
 /// level it offered. Without a profile-level-id the default (level 3.1)
 /// would cap it at 720p.
 fn fix_h264_fmtp(sdp: &str, offered: &[(String, String)]) -> String {
@@ -558,7 +558,7 @@ fn video_branch(video: VideoFormat, sinks: Arc<Sinks>) -> Result<(Vec<gst::Eleme
         .property("wait-for-keyframe", true)
         .build()?;
     // The depayloader asks for "all headers", which the RTP session sends as
-    // a FIR with the same sequence number every time, and the Mac's WebRTC
+    // a FIR with the same sequence number every time, and the sender's WebRTC
     // ignores a FIR it has seen: after the first loss the picture stayed
     // frozen until the next natural keyframe. Ask with a PLI instead, and
     // not for every missing packet: each keyframe is a burst of ~100

@@ -1,4 +1,4 @@
-//! Makes the virtual microphone the default input while the Mac is
+//! Makes the virtual microphone the default input while the sender is
 //! connected, and gives the user's own default back afterwards.
 //!
 //! The previous default is saved on disk before it is replaced, so a crash or
@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::{MIC_NODE_NAME, PipeWire};
+use super::{MIC_NODE_NAME, PipeWire, is_mic_node};
 
 const STATE_FILE: &str = "default-input.json";
 
@@ -47,7 +47,7 @@ impl DefaultInput {
         let current = pw.default_source()?;
         // Already ours (e.g. after a crash the saved file still holds the
         // real previous value): keep what was saved.
-        if current.as_deref() != Some(MIC_NODE_NAME) {
+        if !is_mic_node(current.as_deref()) {
             self.save(&Saved { previous: current })?;
         }
         pw.set_default_source(Some(MIC_NODE_NAME))
@@ -58,7 +58,7 @@ impl DefaultInput {
     /// startup, to repair a crash).
     pub fn give_back(&self, pw: &PipeWire) -> Result<()> {
         let Some(saved) = self.load()? else { return Ok(()) };
-        if pw.default_source()?.as_deref() == Some(MIC_NODE_NAME) {
+        if is_mic_node(pw.default_source()?.as_deref()) {
             pw.set_default_source(saved.previous.as_deref())?;
         }
         match fs::remove_file(&self.path) {

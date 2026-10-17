@@ -1,10 +1,10 @@
 //! Everything the client does with PipeWire, on one thread of its own:
 //!
-//! - the virtual microphone, an `Audio/Source` node named "MacBook
-//!   Microphone" that apps record from, fed with the Mac's audio;
+//! - the virtual microphone, an `Audio/Source` node named "AV Relay
+//!   Microphone" that apps record from, fed with the sender's audio;
 //! - noticing when an app records from it (the node starts streaming), so
-//!   the Mac's microphone runs only then;
-//! - the default input: made the virtual mic while the Mac is connected, and
+//!   the sender's microphone runs only then;
+//! - the default input: made the virtual mic while the sender is connected, and
 //!   given back afterwards (PipeWire's "default" metadata, which WirePlumber
 //!   follows).
 //!
@@ -35,8 +35,16 @@ use playout::Playout;
 
 pub use default_input::DefaultInput;
 
-pub const MIC_NODE_NAME: &str = "av_relay.macbook_mic";
-pub const MIC_DESCRIPTION: &str = "MacBook Microphone";
+pub const MIC_NODE_NAME: &str = "av_relay.microphone";
+/// What the node was called before (0.1.0 test builds): a default input
+/// left at it by a crash is still ours to give back.
+const OLD_MIC_NODE_NAMES: &[&str] = &["av_relay.macbook_mic"];
+
+/// Whether a default-input node name is the virtual microphone's.
+fn is_mic_node(name: Option<&str>) -> bool {
+    name.is_some_and(|n| n == MIC_NODE_NAME || OLD_MIC_NODE_NAMES.contains(&n))
+}
+pub const MIC_DESCRIPTION: &str = "AV Relay Microphone";
 pub const RATE: u32 = 48_000;
 const DEFAULT_SOURCE_KEY: &str = "default.configured.audio.source";
 
@@ -435,7 +443,7 @@ impl Mic {
 }
 
 /// Fills one buffer for the app recording from the mic, keeping the queue at
-/// its target and steering PipeWire's resampler so the Mac's clock and this
+/// its target and steering PipeWire's resampler so the sender's clock and this
 /// computer's audio clock don't drift apart.
 fn process(stream: &pw::stream::Stream, state: &mut MicState) {
     let Some(mut buffer) = stream.dequeue_buffer() else { return };

@@ -133,7 +133,7 @@ pub enum CaptureState {
     Unknown,
 }
 
-/// The state of the Mac's camera or microphone, from `media-state`.
+/// The state of the sender's camera or microphone, from `media-state`.
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct DeviceState {
     pub state: CaptureState,

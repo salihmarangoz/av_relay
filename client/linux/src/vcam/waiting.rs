@@ -1,5 +1,5 @@
-//! The picture the virtual camera shows while the Mac is away: the AV Relay
-//! icon and name, and "Waiting for <Mac>…", drawn with cairo and pango and
+//! The picture the virtual camera shows while the sender is away: the AV Relay
+//! icon and name, and "Waiting for <sender>…", drawn with cairo and pango and
 //! converted to the camera's YUYV.
 
 use anyhow::{Context, Result, anyhow};
@@ -9,14 +9,14 @@ use super::CameraFormat;
 
 const ICON_PNG: &[u8] = include_bytes!("../../../../assets/generated/app-icon-256.png");
 
-/// A YUYV frame of `format` saying AV Relay is waiting for `mac` (or for
-/// "your device" when no Mac is paired yet).
-pub fn waiting_frame(format: CameraFormat, mac: Option<&str>) -> Result<Vec<u8>> {
+/// A YUYV frame of `format` saying AV Relay is waiting for `sender` (or for
+/// "your device" when no sender is paired yet).
+pub fn waiting_frame(format: CameraFormat, sender: Option<&str>) -> Result<Vec<u8>> {
     let (w, h) = (format.width as i32, format.height as i32);
     let mut surface = ImageSurface::create(Format::Rgb24, w, h).map_err(|e| anyhow!("cairo surface: {e}"))?;
     {
         let cr = Cairo::new(&surface).map_err(|e| anyhow!("cairo context: {e}"))?;
-        draw(&cr, w as f64, h as f64, mac)?;
+        draw(&cr, w as f64, h as f64, sender)?;
     }
     surface.flush();
     let stride = surface.stride() as usize;
@@ -24,7 +24,7 @@ pub fn waiting_frame(format: CameraFormat, mac: Option<&str>) -> Result<Vec<u8>>
     Ok(rgb24_to_yuyv(&data, w as usize, h as usize, stride))
 }
 
-fn draw(cr: &Cairo, w: f64, h: f64, mac: Option<&str>) -> Result<()> {
+fn draw(cr: &Cairo, w: f64, h: f64, sender: Option<&str>) -> Result<()> {
     // A dark background with a hint of the logo's blue.
     let bg = LinearGradient::new(0.0, 0.0, w, h);
     bg.add_color_stop_rgb(0.0, 0.07, 0.09, 0.16);
@@ -58,7 +58,7 @@ fn draw(cr: &Cairo, w: f64, h: f64, mac: Option<&str>) -> Result<()> {
         pangocairo::functions::show_layout(cr, &layout);
     };
     line("AV Relay", h * 0.06, pango::Weight::Bold, 1.0, y + size + h * 0.05);
-    let waiting = match mac {
+    let waiting = match sender {
         Some(name) => format!("Waiting for {name}…"),
         None => "Waiting for your device…".to_string(),
     };

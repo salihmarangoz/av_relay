@@ -1,5 +1,5 @@
 //! The client side of a session (docs/protocol.md, section 6): a Noise IK
-//! handshake with the paired Mac's key, then JSON control messages, one per
+//! handshake with the paired sender's key, then JSON control messages, one per
 //! Noise transport message.
 
 use std::io;
@@ -15,23 +15,23 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
-    #[error("Couldn't authenticate the Mac. If AV Relay was reset on the Mac, pair again.")]
+    #[error("Couldn't authenticate the sender. If AV Relay was reset on the sender, pair again.")]
     AuthFailed,
-    #[error("The Mac doesn't know this computer any more. Pair again.")]
+    #[error("The sender doesn't know this computer any more. Pair again.")]
     NotPaired,
-    #[error("The Mac is busy with another computer.")]
+    #[error("The sender is busy with another computer.")]
     Busy,
-    #[error("The Mac runs an AV Relay version that doesn't speak this protocol version.")]
+    #[error("The sender runs an AV Relay version that doesn't speak this protocol version.")]
     UnsupportedVersion,
-    #[error("The Mac didn't answer in time.")]
+    #[error("The sender didn't answer in time.")]
     Timeout,
-    #[error("The Mac sent something unexpected: {0}")]
+    #[error("The sender sent something unexpected: {0}")]
     Protocol(String),
     #[error("Connection lost: {0}")]
     Io(#[from] io::Error),
 }
 
-/// Opens a session on `stream` (already connected to the Mac). Returns the
+/// Opens a session on `stream` (already connected to the sender). Returns the
 /// two halves of the encrypted control channel.
 pub async fn connect<S: AsyncRead + AsyncWrite + Unpin>(
     stream: S,
@@ -64,7 +64,7 @@ pub(crate) async fn connect_with<S: AsyncRead + AsyncWrite + Unpin>(
 
         let reply = match read_frame(&mut stream).await {
             Ok(f) => f,
-            // A Mac that can't decrypt message 1 (it was reset) just closes.
+            // A sender that can't decrypt message 1 (it was reset) just closes.
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Err(SessionError::AuthFailed),
             Err(e) => return Err(e.into()),
         };
@@ -95,7 +95,7 @@ pub struct SessionWriter<S> {
 }
 
 impl<S: AsyncRead + AsyncWrite> SessionReader<S> {
-    /// The next message from the Mac. `error` messages for this client's
+    /// The next message from the sender. `error` messages for this client's
     /// pairing state come back as errors.
     pub async fn recv(&mut self) -> Result<ServerMsg, SessionError> {
         let frame = read_frame(&mut self.inner).await?;
@@ -136,13 +136,13 @@ mod tests {
     use super::*;
     use crate::crypto::test_vectors::{hex32, load};
     use crate::proto::VideoFormat;
-    use crate::proto::pairing::tests::fake_mac;
+    use crate::proto::pairing::tests::fake_server;
 
     #[tokio::test]
     async fn session_matches_the_vector_on_the_wire() {
         let v = load("session.json");
-        let (client, mac) = tokio::io::duplex(1 << 16);
-        let mac = tokio::spawn(fake_mac(mac, v["wire"].as_array().unwrap().clone()));
+        let (client, server) = tokio::io::duplex(1 << 16);
+        let server = tokio::spawn(fake_server(server, v["wire"].as_array().unwrap().clone()));
 
         let me = StaticKey::from_private(hex32(&v["noise"]["client_static_private"]));
         let server_key = hex32(&v["noise"]["server_static_public"]);
@@ -157,7 +157,7 @@ mod tests {
             .await
             .unwrap();
         let welcome = reader.recv().await.unwrap();
-        mac.await.unwrap();
+        server.await.unwrap();
         let ServerMsg::Welcome { name, device_id, .. } = welcome else { panic!("{welcome:?}") };
         assert_eq!(name, "MacBook Air");
         let paired = load("pairing.json");
@@ -166,11 +166,11 @@ mod tests {
 
     #[tokio::test]
     async fn stale_server_key_is_reported() {
-        let (client, mut mac) = tokio::io::duplex(4096);
+        let (client, mut server) = tokio::io::duplex(4096);
         tokio::spawn(async move {
-            // Preamble and message 1 arrive; a reset Mac can't decrypt it and hangs up.
-            read_frame(&mut mac).await.unwrap();
-            read_frame(&mut mac).await.unwrap();
+            // Preamble and message 1 arrive; a reset sender can't decrypt it and hangs up.
+            read_frame(&mut server).await.unwrap();
+            read_frame(&mut server).await.unwrap();
         });
         let Err(err) = connect(client, &StaticKey::generate(), &[9u8; 32]).await else { panic!("connected") };
         assert!(matches!(err, SessionError::AuthFailed), "{err:?}");

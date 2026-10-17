@@ -3,11 +3,11 @@
 //! The device itself is created once (at startup) through v4l2loopback's
 //! control device, with exclusive caps: it is listed as a capture device only
 //! while a writer has it open. So [`VirtualCamera`] lives exactly as long as
-//! the Mac is available: opening it makes the camera appear in apps, dropping
+//! the sender is available: opening it makes the camera appear in apps, dropping
 //! it makes it disappear again.
 //!
 //! v4l2loopback (0.13+) tells the writer when a reader starts or stops
-//! streaming. That is how we know an app is using the camera and the Mac
+//! streaming. That is how we know an app is using the camera and the sender
 //! should start capturing.
 
 mod sys;
@@ -33,7 +33,9 @@ const CONTROL_DEVICE: &str = "/dev/v4l2loopback";
 const SYSFS_VIDEO: &str = "/sys/class/video4linux";
 
 /// The label apps show for the camera.
-pub const CARD_LABEL: &str = "MacBook Camera";
+pub const CARD_LABEL: &str = "AV Relay Camera";
+/// What the camera was called before (0.1.0 test builds).
+const OLD_CARD_LABELS: &[&str] = &["MacBook Camera"];
 /// /dev/video48 when it's free: a stable path, because some apps remember the
 /// camera by its path.
 pub const PREFERRED_DEVICE_NR: i32 = 48;
@@ -92,6 +94,7 @@ pub fn check_loopback() -> Result<(u32, u32, u32)> {
 /// Returns the number N of the loopback device /dev/videoN labelled `label`,
 /// creating it if it doesn't exist.
 pub fn ensure_device(label: &str) -> Result<u32> {
+    remove_old_devices();
     if let Some(nr) = find_device(label)? {
         return Ok(nr);
     }
@@ -131,6 +134,24 @@ pub fn ensure_device(label: &str) -> Result<u32> {
     Ok(nr as u32)
 }
 
+/// A device under the camera's old name would keep /dev/video48 (and linger
+/// until a reboot): removes it, unless something still has it open.
+fn remove_old_devices() {
+    for old in OLD_CARD_LABELS {
+        let Ok(Some(nr)) = find_device(old) else { continue };
+        let removed = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(CONTROL_DEVICE)
+            .map_err(anyhow::Error::from)
+            .and_then(|ctl| Ok(unsafe { sys::loopback_ctl_remove(ctl.as_raw_fd(), nr.into()) }?));
+        match removed {
+            Ok(_) => log::info!("removed /dev/video{nr} ({old}), the camera's old name"),
+            Err(e) => log::info!("keeping /dev/video{nr} ({old}): {e}"),
+        }
+    }
+}
+
 fn find_device(label: &str) -> Result<Option<u32>> {
     let entries = match fs::read_dir(SYSFS_VIDEO) {
         Ok(e) => e,
@@ -158,22 +179,22 @@ fn find_device(label: &str) -> Result<Option<u32>> {
 /// How frames reached the camera since the last `take_stats()`.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CamStats {
-    /// Frames from the Mac.
+    /// Frames from the sender.
     pub pushed: u64,
     /// Of those, frames that came more than 1.5 frame intervals after the
     /// one before.
     pub late: u64,
-    /// The longest time between two frames from the Mac.
+    /// The longest time between two frames from the sender.
     pub max_gap: Duration,
     /// The newest frame written again because the next one was overdue.
     pub repeated: u64,
-    /// Placeholder frames written (no frame from the Mac yet).
+    /// Placeholder frames written (no frame from the sender yet).
     pub placeholder: u64,
 }
 
 struct State {
     in_use: bool,
-    /// The newest frame from the Mac; empty until one arrives.
+    /// The newest frame from the sender; empty until one arrives.
     frame: Vec<u8>,
     /// Shown while there is no frame: black, or the waiting picture.
     placeholder: Vec<u8>,
@@ -181,7 +202,7 @@ struct State {
     last_push: Instant,
     last_write: Instant,
     stats: CamStats,
-    /// When the previous frame from the Mac arrived, for the gaps.
+    /// When the previous frame from the sender arrived, for the gaps.
     prev_push: Option<Instant>,
 }
 
@@ -333,7 +354,7 @@ impl VirtualCamera {
         }
     }
 
-    /// Goes back to the placeholder, e.g. when the Mac stops its camera.
+    /// Goes back to the placeholder, e.g. when the sender stops its camera.
     pub fn clear(&self) {
         let mut state = self.shared.state.lock().unwrap();
         state.frame.clear();
@@ -345,8 +366,8 @@ impl VirtualCamera {
         std::mem::take(&mut self.shared.state.lock().unwrap().stats)
     }
 
-    /// What to show while there's no frame from the Mac: `None` is black
-    /// (the Mac's camera is starting), `Some` e.g. the waiting picture.
+    /// What to show while there's no frame from the sender: `None` is black
+    /// (the sender's camera is starting), `Some` e.g. the waiting picture.
     pub fn set_placeholder(&self, frame: Option<Vec<u8>>) {
         let frame = frame.filter(|f| f.len() == self.shared.format.frame_size()).unwrap_or_else(|| black(self.shared.format));
         self.shared.state.lock().unwrap().placeholder = frame;
@@ -435,8 +456,8 @@ fn watch_usage(shared: &Shared, on_usage: impl Fn(bool)) {
 }
 
 /// While an app streams, makes sure it keeps getting frames: the
-/// placeholder at the frame rate until the Mac's first frame arrives, and the
-/// newest frame again if the Mac's stream stalls. Apps treat a camera that
+/// placeholder at the frame rate until the sender's first frame arrives, and the
+/// newest frame again if the sender's stream stalls. Apps treat a camera that
 /// sends nothing as broken. A frame that is merely a little late (network
 /// jitter) is not a stall: repeating the old one just before it would stutter.
 fn keep_frames(shared: &Shared) {

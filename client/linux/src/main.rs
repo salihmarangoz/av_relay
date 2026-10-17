@@ -30,7 +30,7 @@ fn main() -> Result<()> {
     }
 }
 
-/// Runs the client without a tray: connects to the paired Mac and logs its
+/// Runs the client without a tray: connects to the paired sender and logs its
 /// status. Ctrl+C or SIGTERM quits cleanly (the default input is given back).
 fn run_headless() -> Result<()> {
     let store = store::Store::open_default()?;
