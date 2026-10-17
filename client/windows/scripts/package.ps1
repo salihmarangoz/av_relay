@@ -29,7 +29,7 @@ Copy-Item -LiteralPath "$gst/libexec/gstreamer-1.0/gst-plugin-scanner.exe" -Dest
 # GStreamer and the MSVC redistributable directory are copied; OS DLLs stay OS-owned.
 $vswhere="${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
 $vs=& $vswhere -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-$crt=Get-ChildItem "$vs/VC/Redist/MSVC/*/x64/Microsoft.VC143.CRT" -Directory | Sort-Object FullName -Descending | Select-Object -First 1
+$crt=Get-ChildItem "$vs/VC/Redist/MSVC/*/x64/Microsoft.VC*.CRT" -Directory | Sort-Object FullName -Descending | Select-Object -First 1
 if (-not $crt) { throw 'MSVC x64 redistributable DLLs not found' }
 foreach ($dll in Get-ChildItem -LiteralPath $crt.FullName -Filter '*.dll') { Copy-Item -LiteralPath $dll.FullName -Destination "$stage/bin" }
 $queue=[Collections.Generic.Queue[string]]::new()

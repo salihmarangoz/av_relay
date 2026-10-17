@@ -12,7 +12,9 @@ $localGcc = Join-Path $repo '.tools/w64devkit/bin'
 # Configure MSVC even from an ordinary PowerShell (and restricted environments
 # where rustc cannot discover Visual Studio through the registry).
 $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
-if (-not (Get-Command link.exe -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $vswhere)) {
+# Git's usr/bin can supply an unrelated link.exe on CI. Always locate the
+# MSVC tools and SDK together instead of treating that command as proof.
+if (Test-Path -LiteralPath $vswhere) {
     $vs = & $vswhere -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
     if ($vs) {
         $vc = Get-ChildItem -LiteralPath "$vs/VC/Tools/MSVC" -Directory | Sort-Object Name -Descending | Select-Object -First 1
