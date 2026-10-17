@@ -65,6 +65,9 @@ pub enum Status {
     /// Paired, but the Mac isn't reachable right now.
     Searching { mac: String, last_error: Option<String>, devices: Hold },
     Connected { mac: String, camera: Device, mic: Device },
+    /// Switched off ("Enable AV Relay"): no connection, no devices. `mac` is
+    /// the paired Mac, if any.
+    Disabled { mac: Option<String> },
 }
 
 /// Whether the virtual devices exist while the Mac is away.
@@ -98,6 +101,8 @@ pub enum Command {
     VideoChanged,
     /// "Keep virtual devices on" changed (saved in the settings).
     KeepDevicesChanged,
+    /// "Enable AV Relay" changed (saved in the settings).
+    EnabledChanged,
     /// Remove the pairing (on the Mac too, if it's connected).
     Forget,
     Quit,
@@ -348,6 +353,27 @@ pub async fn run(core: Arc<Core>, status: watch::Sender<Status>, mut commands: m
     let mut kept = Kept { devices: None, until: None, notify_tx, notify_rx };
     let mut backoff = Duration::from_secs(1);
     loop {
+        if !core.store.settings().unwrap_or_default().enabled {
+            // Switched off: as if closed (the default input goes back, the
+            // devices go, even when kept on), until switched on again.
+            if kept.devices.take().is_some() {
+                log::info!("switched off; removing the virtual devices");
+            }
+            kept.until = None;
+            let mac = core.store.paired_mac().ok().flatten().map(|m| m.name);
+            status.send_replace(Status::Disabled { mac });
+            match commands.recv().await {
+                Some(Command::Quit) | None => return,
+                Some(Command::Forget) => {
+                    if let Err(e) = core.store.forget_paired_mac() {
+                        log::error!("forgetting the Mac: {e:#}");
+                    }
+                }
+                _ => {}
+            }
+            backoff = Duration::from_secs(1);
+            continue;
+        }
         let keep = core.store.settings().unwrap_or_default().keep_devices;
         let mac = match core.store.paired_mac() {
             Ok(Some(mac)) => mac,
@@ -386,6 +412,13 @@ pub async fn run(core: Arc<Core>, status: watch::Sender<Status>, mut commands: m
                     // Applied by the session (when the camera is idle) or after it.
                     Some(Command::VideoChanged) => { let _ = ctl_tx.send(Ctl::VideoChanged); continue; }
                     Some(Command::KeepDevicesChanged) => continue,
+                    Some(Command::EnabledChanged) => {
+                        if core.store.settings().unwrap_or_default().enabled {
+                            continue;
+                        }
+                        let _ = ctl_tx.send(Ctl::Quit);
+                        pending = Some(Command::EnabledChanged);
+                    }
                 },
             }
             // A session gets a moment to finish politely; an attempt that

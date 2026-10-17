@@ -14,6 +14,7 @@ pub struct Tray {
     pub problems: Vec<String>,
     pub autostart: bool,
     pub keep_devices: bool,
+    pub enabled: bool,
     pub video: VideoFormat,
     pub events: async_channel::Sender<UiEvent>,
 }
@@ -25,7 +26,7 @@ impl Tray {
 
     fn mac_name(&self) -> Option<&str> {
         match &self.status {
-            Status::Searching { mac, .. } | Status::Connected { mac, .. } => Some(mac),
+            Status::Searching { mac, .. } | Status::Connected { mac, .. } | Status::Disabled { mac: Some(mac) } => Some(mac),
             _ => None,
         }
     }
@@ -36,6 +37,7 @@ impl Tray {
             Status::NotPaired { .. } => "Not paired with a Mac".into(),
             Status::Searching { mac, .. } => format!("Looking for {mac}…"),
             Status::Connected { mac, .. } => format!("Connected to {mac}"),
+            Status::Disabled { .. } => "Off: no virtual camera or microphone".into(),
         }
     }
 
@@ -43,6 +45,7 @@ impl Tray {
         match &self.status {
             Status::Connected { camera, mic, .. } if camera.used_here || mic.used_here => "live",
             Status::Connected { .. } => "on",
+            Status::Disabled { .. } => "disabled",
             _ => "off",
         }
     }
@@ -96,6 +99,19 @@ impl ksni::Tray for Tray {
         use ksni::menu::*;
         let mut items: Vec<ksni::MenuItem<Self>> = Vec::new();
         let info = |label: String| StandardItem { label, enabled: false, ..Default::default() }.into();
+        items.push(
+            CheckmarkItem {
+                label: "Enable AV Relay".into(),
+                checked: self.enabled,
+                activate: Box::new(|t: &mut Self| {
+                    t.enabled = !t.enabled;
+                    t.send(UiEvent::SetEnabled(t.enabled));
+                }),
+                ..Default::default()
+            }
+            .into(),
+        );
+        items.push(MenuItem::Separator);
         items.push(info(self.headline()));
         if let Status::Searching { last_error: Some(e), .. } = &self.status {
             items.push(info(shorten(e, 60)));
@@ -122,7 +138,7 @@ impl ksni::Tray for Tray {
         }
         items.push(MenuItem::Separator);
 
-        let paired = !matches!(self.status, Status::NotPaired { .. } | Status::Starting);
+        let paired = !matches!(self.status, Status::NotPaired { .. } | Status::Starting | Status::Disabled { mac: None });
         items.push(
             StandardItem {
                 label: if paired { "Pair with another Mac…".into() } else { "Pair with a Mac…".into() },
