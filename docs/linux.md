@@ -133,13 +133,15 @@ tree: `client/linux/scripts/devices-test.html`), click **Start**, and pick
 size and frame rate, and a level meter for the microphone.
 
 **Sound or picture drops out now and then.** Usually that's Wi-Fi: a
-Wi-Fi network can go quiet for 0.1-0.3 seconds now and then (some routers
-do it every 20-30 seconds). AV Relay rides it out: after a
-dropout it keeps more sound buffered (up to 0.2 seconds) for a while, holds
-the picture back just as long so lips stay in sync, asks the sender to resend
-lost video, and lets the buffer shrink again once the network is calm. For
-fewer dropouts, bring the sender closer to the router or use a cable on either
-side. To see whether it's the network, ping the router from either
+Wi-Fi network can go quiet for 0.1-0.5 seconds now and then (some do it
+every 20-30 seconds). AV Relay plays sound and picture a little after they
+were captured, the same for both so lips stay in sync, and sets that delay
+from how late packets arrived over the last minute: about 0.1-0.2 seconds on
+a calm network, up to 2 seconds on a stalling one. After a stall longer than
+the delay you may hear one gap; the delay then grows so the next one passes,
+and shrinks again slowly once the network is calm. It starts each call with
+the delay the last one ended with. For less delay, bring the sender closer
+to the router or use a cable on either side. To see whether it's the network, ping the router from either
 computer for a minute (`ping -c 60 <router address>`) and look for
 replies slower than 100 ms.
 

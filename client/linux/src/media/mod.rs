@@ -412,7 +412,10 @@ impl Receiver {
                 }
             }
         }
-        self.webrtc.set_property("latency", latency);
+        // For jitter buffers still to come.
+        if self.webrtc.property::<u32>("latency") != latency {
+            self.webrtc.set_property("latency", latency);
+        }
         if changed {
             // The sinks take the new latency from here on.
             let _ = self.pipeline.recalculate_latency();

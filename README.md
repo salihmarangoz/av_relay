@@ -121,9 +121,10 @@ off, pair with a different sender, or forget this one.
 When an app on the receiver opens the camera or the microphone, AV Relay asks
 the sender to start it; when the app lets go, the sender stops a few seconds
 later. Video is H.264, encoded in hardware on the Mac (up to 1080p at 30
-fps); audio is Opus. Over Wi-Fi the receiver keeps a small buffer that grows
-when the network stalls, and holds the picture back by the same amount, so
-sound stays smooth and in step with the picture. The details are in
+fps); audio is Opus. The receiver plays both a little after they were
+captured: just long enough to cover what the network did over the last
+minute (from 0.1 s on a calm network up to 2 s on a stalling Wi-Fi), the
+same for sound and picture, so they stay smooth and in step. The details are in
 [docs/architecture.md](docs/architecture.md) and the wire protocol in
 [docs/protocol.md](docs/protocol.md).
 
