@@ -11,6 +11,7 @@ struct AVRelayApp: App {
     @StateObject private var model = AppModel()
 
     init() {
+        MediaEngine.forwardWebRTCLog()
         // `open "AV Relay.app" --args --self-test REPORT [WIDTHxHEIGHT]`: the real
         // camera and microphone through the whole media path, then quit (see README).
         let arguments = CommandLine.arguments

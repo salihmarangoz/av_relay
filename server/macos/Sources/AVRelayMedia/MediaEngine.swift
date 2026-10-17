@@ -66,6 +66,25 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
     /// the camera or microphone, not even events still queued for a session
     /// that has just ended.
     private var suspended = false
+    /// Sends libwebrtc's own log to the system log, from now on: warnings and
+    /// errors kept, the rest at info level (diagnostics: `log stream --info`).
+    /// For the app; tests leave it off, as libwebrtc then also writes to stderr.
+    public static func forwardWebRTCLog() { _ = webrtcLog }
+
+    private static let webrtcLog: RTCCallbackLogger = {
+        let logger = RTCCallbackLogger()
+        let log = Logger(subsystem: "io.github.salihmarangoz.avrelay", category: "webrtc")
+        logger.severity = .info
+        logger.start { message, severity in
+            let line = message.trimmingCharacters(in: .whitespacesAndNewlines)
+            if severity == .info {
+                log.info("\(line, privacy: .public)")
+            } else {
+                log.notice("\(line, privacy: .public)")
+            }
+        }
+        return logger
+    }()
 
     public init(settings: Settings = Settings()) {
         self.settings = settings
@@ -109,6 +128,10 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
     /// A few lines on how the current call is doing (diagnostics).
     public func statisticsSummary() async -> String {
         guard let report = await statistics() else { return "no call" }
+        return Self.summarize(report)
+    }
+
+    static func summarize(_ report: RTCStatisticsReport) -> String {
         var lines: [String] = []
         func values(_ type: String, kind: String? = nil) -> [[String: NSObject]] {
             report.statistics.values.filter { $0.type == type && (kind == nil || $0.values["kind"] as? String == kind) }.map(\.values)
@@ -118,7 +141,8 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
         }
         for v in values("outbound-rtp", kind: "video") {
             lines.append("video out: " + show(v, ["frameWidth", "frameHeight", "framesPerSecond", "framesEncoded", "keyFramesEncoded",
-                                                 "targetBitrate", "qualityLimitationReason", "nackCount", "pliCount", "firCount",
+                                                 "targetBitrate", "qualityLimitationReason", "qualityLimitationResolutionChanges",
+                                                 "hugeFramesSent", "nackCount", "pliCount", "firCount",
                                                  "retransmittedPacketsSent", "encoderImplementation"]))
         }
         for v in values("outbound-rtp", kind: "audio") {
@@ -248,6 +272,7 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
         private var linger: [Kind: DispatchWorkItem] = [:]
         private var iceRecovery: DispatchWorkItem?
         private var closed = false
+        private var diagnostics: DispatchSourceTimer?
         private var queue: DispatchQueue { engine.queue }
         private var log: Logger { engine.log }
 
@@ -329,11 +354,35 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
 
             makeOffer(iceRestart: false)
             reportState()
+            startDiagnostics()
+        }
+
+        /// Every 5 s while the camera or microphone runs: one log line with the
+        /// call's WebRTC stats and the devices' own cadence, to tell a stutter
+        /// at the source from one on the network. Read it with
+        /// log show --predicate 'subsystem == "io.github.salihmarangoz.avrelay"' --info --last 10m
+        private func startDiagnostics() {
+            let timer = DispatchSource.makeTimerSource(queue: queue)
+            timer.schedule(deadline: .now() + 5, repeating: 5)
+            timer.setEventHandler { [weak self] in
+                guard let self, !closed, let peer else { return }
+                let mic = engine.microphone.takeCadence(), camera = engine.camera.takeCadence()
+                let active = [states[.video]!.state, states[.audio]!.state].contains { $0 != .off }
+                guard active else { return }
+                peer.statistics { [log] report in
+                    let summary = MediaEngine.summarize(report).replacingOccurrences(of: "\n", with: " | ")
+                    log.notice("stats: \(summary, privacy: .public) | mic \(mic.description, privacy: .public) | camera \(camera.description, privacy: .public)")
+                }
+            }
+            diagnostics = timer
+            timer.resume()
         }
 
         func close() {
             guard !closed else { return }
             closed = true
+            diagnostics?.cancel()
+            diagnostics = nil
             linger.values.forEach { $0.cancel() }
             iceRecovery?.cancel()
             // At once, no linger: the session is over.
