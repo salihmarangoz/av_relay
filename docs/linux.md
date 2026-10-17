@@ -60,10 +60,10 @@ OBS's virtual camera, may then need its own device:
 Linux has no system-wide default camera; each app remembers its own choice.
 Pick **MacBook Camera** once in each app.
 
-Apps that open cameras directly see **MacBook Camera**: Firefox (tested),
-and the same way Chrome, Discord, Zoom and OBS. Apps that only take cameras
-through PipeWire's camera portal (some Flatpak apps, GNOME Snapshot) don't
-see it yet.
+Apps that open cameras directly see **MacBook Camera**: Firefox and Chrome
+(tested), and the same way Discord (built on Chromium), Zoom and OBS. Apps
+that only take cameras through PipeWire's camera portal (some Flatpak apps,
+GNOME Snapshot) don't see it yet.
 
 A level meter can count as using the microphone: while **Settings → Sound**
 shows the input level of **MacBook Microphone**, the Mac's microphone may be
