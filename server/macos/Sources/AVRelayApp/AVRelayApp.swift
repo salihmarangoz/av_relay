@@ -57,6 +57,7 @@ struct MenuContent: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        Toggle("Enable AV Relay", isOn: $model.enabled)
         Text(model.statusLine)
         if let mediaLine = model.mediaLine {
             Text(mediaLine)
@@ -67,6 +68,7 @@ struct MenuContent: View {
             openWindow(id: PairingView.windowID)
             NSApp.activate()
         }
+        .disabled(!model.enabled)
         Menu("Paired Devices") {
             if model.paired.isEmpty {
                 Text("None yet")
@@ -113,7 +115,8 @@ struct MenuContent: View {
 }
 
 /// The logo as a menu bar template image: off (not connected), on
-/// (connected), live (the camera or microphone in use).
+/// (connected), live (the camera or microphone in use), disabled (switched
+/// off in the menu).
 struct MenuBarIcon: View {
     let state: AppModel.IconState
 
@@ -123,7 +126,12 @@ struct MenuBarIcon: View {
             Image(nsImage: image)
         } else {
             // Not in an app bundle (swift run): a system symbol instead.
-            Image(systemName: state == .off ? "video.slash" : state == .on ? "web.camera" : "web.camera.fill")
+            switch state {
+            case .off: Image(systemName: "video")
+            case .on: Image(systemName: "web.camera")
+            case .live: Image(systemName: "web.camera.fill")
+            case .disabled: Image(systemName: "video.slash")
+            }
         }
     }
 }

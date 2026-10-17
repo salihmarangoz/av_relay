@@ -26,6 +26,19 @@ final class AppModel: ObservableObject {
     @Published private(set) var cameras: [CaptureDeviceInfo] = []
     @Published private(set) var microphones: [CaptureDeviceInfo] = []
 
+    /// Off is as if AV Relay were closed: no listening, no Bonjour, the
+    /// camera and microphone closed; only the menu stays. Remembered.
+    @Published var enabled: Bool {
+        didSet {
+            guard enabled != oldValue else { return }
+            defaults.set(enabled, forKey: Keys.enabled)
+            serially { [weak self] in
+                guard let self else { return }
+                if self.enabled { await self.turnOn() } else { await self.turnOff() }
+            }
+        }
+    }
+
     /// nil: the built-in one.
     @Published var cameraChoice: String? {
         didSet {
@@ -70,9 +83,11 @@ final class AppModel: ObservableObject {
     private var deviceObservers: [NSObjectProtocol] = []
     private var systemObservers: [NSObjectProtocol] = []
     private var sleepWatcher: SleepWatcher?
+    /// Starting and stopping the server, one change after the other.
+    private var transition: Task<Void, Never>?
 
     enum Keys {
-        static let camera = "camera", microphone = "microphone", port = "port"
+        static let camera = "camera", microphone = "microphone", port = "port", enabled = "enabled"
         /// Set once Open at Login was turned on at first launch; after that, the user's toggle decides.
         static let loginItemDefaulted = "loginItemDefaulted"
     }
@@ -88,6 +103,7 @@ final class AppModel: ObservableObject {
         cameraChoice = camera
         microphoneChoice = microphone
         openAtLogin = Self.loginItemOn
+        enabled = defaults.object(forKey: Keys.enabled) as? Bool ?? true
         let savedPort = defaults.integer(forKey: Keys.port)
         port = (1...65535).contains(savedPort) ? UInt16(savedPort) : Self.defaultPort
 
@@ -117,7 +133,9 @@ final class AppModel: ObservableObject {
             })
         }
         observeSleepAndQuit()
-        Task { await startServer() }
+        if enabled {
+            serially { [weak self] in await self?.startServer() }
+        }
     }
 
     /// Before the Mac sleeps: end the session (bye "sleep"), refuse new ones
@@ -134,8 +152,9 @@ final class AppModel: ObservableObject {
             }
         }, didWake: { [weak self] in
             Task { @MainActor in
-                self?.engine.resume()
-                await self?.server?.resume()
+                guard let self, self.enabled else { return }
+                self.engine.resume()
+                await self.server?.resume()
             }
         })
         systemObservers.append(NotificationCenter.default.addObserver(
@@ -228,17 +247,49 @@ final class AppModel: ObservableObject {
         guard newPort != port, newPort > 0 else { return }
         port = newPort
         defaults.set(Int(newPort), forKey: Keys.port)
-        Task {
-            eventsTask?.cancel()
-            await server?.stop()
-            server = nil
-            connected = nil
-            // The old server's code is gone with it.
-            pairingCode = nil
-            pairingExpires = nil
-            pairingResult = nil
-            await startServer()
+        serially { [weak self] in
+            guard let self, self.server != nil else { return }
+            await self.stopServer()
+            await self.startServer()
         }
+    }
+
+    /// Runs `change` once the changes before it have finished, so a quick
+    /// off-on or a port change can't interleave with another.
+    private func serially(_ change: @escaping @MainActor () async -> Void) {
+        let previous = transition
+        transition = Task {
+            await previous?.value
+            await change()
+        }
+    }
+
+    private func stopServer() async {
+        eventsTask?.cancel()
+        eventsTask = nil
+        let stopping = server
+        server = nil
+        await stopping?.stop()
+        listeningPort = nil
+        connected = nil
+        // The old server's code is gone with it.
+        pairingCode = nil
+        pairingExpires = nil
+        pairingResult = nil
+    }
+
+    /// Switched off: the receiver gets bye "quit", as when the app quits.
+    private func turnOff() async {
+        guard !enabled else { return }
+        await stopServer()
+        await engine.stopAll()
+        problem = nil
+    }
+
+    private func turnOn() async {
+        guard enabled, server == nil else { return }
+        engine.resume()
+        await startServer()
     }
 
     // MARK: Pairing
@@ -254,7 +305,11 @@ final class AppModel: ObservableObject {
     func remove(_ client: PairedClient) {
         Task {
             do {
-                try await server?.removeClient(publicKey: client.publicKey)
+                if let server {
+                    try await server.removeClient(publicKey: client.publicKey)
+                } else {
+                    _ = try store?.remove(publicKey: client.publicKey)
+                }
             } catch {
                 problem = "Couldn't remove \(client.name): \(error.localizedDescription)"
             }
@@ -275,6 +330,7 @@ final class AppModel: ObservableObject {
     // MARK: Menu text
 
     var statusLine: String {
+        if !enabled { return "Off: receivers can't connect" }
         if let problem { return problem }
         if let connected { return "Connected to \(connected.name)" }
         if paired.isEmpty { return "Not paired yet" }
@@ -286,9 +342,10 @@ final class AppModel: ObservableObject {
         return "Camera \(Self.describe(media.video)) · Microphone \(Self.describe(media.audio))"
     }
 
-    enum IconState: String { case off, on, live }
+    enum IconState: String { case off, on, live, disabled }
 
     var iconState: IconState {
+        if !enabled { return .disabled }
         if media.video.state == .on || media.audio.state == .on { return .live }
         return connected != nil ? .on : .off
     }
