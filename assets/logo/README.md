@@ -6,7 +6,7 @@ relayed. Nothing is drawn by hand. To change the logo, change the numbers at
 the top of the script and run it again.
 
 ```
-python3 -m venv .venv && .venv/bin/pip install pillow
+python3 -m venv .venv && .venv/bin/pip install -r assets/logo/requirements.txt
 .venv/bin/python assets/logo/generate.py          # rewrites assets/generated/
 .venv/bin/python assets/logo/generate.py --check  # CI: fails if they're stale
 ```

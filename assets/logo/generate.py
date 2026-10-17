@@ -3,7 +3,7 @@
 need. The motif: a camera lens sending two arcs of signal to the right, i.e.
 the Mac's camera and microphone, relayed.
 
-    python3 -m venv .venv && .venv/bin/pip install pillow
+    python3 -m venv .venv && .venv/bin/pip install -r assets/logo/requirements.txt
     .venv/bin/python assets/logo/generate.py          # writes assets/generated/
     .venv/bin/python assets/logo/generate.py --check  # fails if out of date
 

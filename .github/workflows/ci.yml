@@ -1,10 +1,14 @@
-# Build and test on every push. The Linux client adds its job here (T10).
+# Build and test the Mac app and the shared vectors when they change. macOS
+# runner minutes count 10x on a private repo, hence the paths filter; the
+# Linux client has its own workflow (linux.yml).
 name: CI
 
 on:
   push:
     branches: [main, "task/**"]
+    paths: ["server/**", "tests/**", "docs/protocol.md", "assets/generated/**", ".github/workflows/ci.yml"]
   pull_request:
+    paths: ["server/**", "tests/**", "docs/protocol.md", "assets/generated/**", ".github/workflows/ci.yml"]
 
 permissions:
   contents: read

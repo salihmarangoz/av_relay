@@ -1,0 +1,47 @@
+# The Linux client: test it and build its .deb when it (or what it is built
+# from) changes. Its own workflow, so Mac-only pushes don't run it.
+name: Linux
+
+on:
+  push:
+    branches: [main, "task/**"]
+    paths: ["client/linux/**", "tests/vectors/**", "assets/**", ".github/workflows/linux.yml"]
+  pull_request:
+    paths: ["client/linux/**", "tests/vectors/**", "assets/**", ".github/workflows/linux.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux client and .deb
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: client/linux
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && scripts/install-build-deps.sh
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: client/linux
+      - name: Test (crypto and wire vectors, protocol, mic drift loop, settings)
+        run: cargo test --locked
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
+      - run: cargo deb --locked
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-deb
+          path: client/linux/target/debian/*.deb
+          retention-days: 7
+
+  icons:
+    name: Generated icons are current
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 -m venv .venv && .venv/bin/pip install -q -r assets/logo/requirements.txt
+      - run: .venv/bin/python -I assets/logo/generate.py --check

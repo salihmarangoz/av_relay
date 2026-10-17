@@ -6,13 +6,8 @@
 # part of this itself.
 set -euo pipefail
 
-sudo apt-get install -y \
-	build-essential pkg-config clang libclang-dev \
-	libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev \
-	gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav gstreamer1.0-nice \
-	libpipewire-0.3-dev libspa-0.2-dev \
-	libgtk-4-dev libadwaita-1-dev \
-	v4l-utils v4l2loopback-utils
+"$(dirname "$0")/install-build-deps.sh"
+sudo apt-get install -y v4l-utils v4l2loopback-utils
 
 echo 'KERNEL=="v4l2loopback", SUBSYSTEM=="misc", TAG+="uaccess"' |
 	sudo tee /etc/udev/rules.d/70-av-relay.rules >/dev/null

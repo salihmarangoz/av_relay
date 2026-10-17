@@ -65,6 +65,7 @@ assets = [
     ["target/release/av-relay", "usr/bin/", "755"],
     ["packaging/io.github.salihmarangoz.avrelay.desktop", "usr/share/applications/", "644"],
     ["packaging/io.github.salihmarangoz.avrelay.metainfo.xml", "usr/share/metainfo/", "644"],
+    ["packaging/autostart.desktop", "etc/xdg/autostart/io.github.salihmarangoz.avrelay.desktop", "644"],
     ["packaging/70-av-relay.rules", "usr/lib/udev/rules.d/", "644"],
     ["packaging/modules-load.conf", "etc/modules-load.d/av-relay.conf", "644"],
     ["packaging/modprobe.conf", "etc/modprobe.d/av-relay.conf", "644"],

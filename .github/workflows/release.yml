@@ -1,5 +1,5 @@
 # On a version tag (v1.2.3): build both apps and publish them as a GitHub
-# Release. The Linux client adds its .deb job here and to `needs` (T10).
+# Release: the Mac .zip and .dmg, and the Linux .deb.
 name: Release
 
 on:
@@ -29,9 +29,31 @@ jobs:
             server/macos/build/AV-Relay-*-macOS.zip
             server/macos/build/AV-Relay-*-macOS.dmg
 
+  linux:
+    name: Linux .deb
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: client/linux
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && scripts/install-build-deps.sh
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Take the version from the tag
+        run: sed -i "0,/^version = .*/s//version = \"${GITHUB_REF_NAME#v}\"/" Cargo.toml
+      - run: cargo test
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
+      - run: cargo deb
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-linux
+          path: client/linux/target/debian/av-relay_*.deb
+
   publish:
     name: Publish the release
-    needs: [macos]
+    needs: [macos, linux]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v8
