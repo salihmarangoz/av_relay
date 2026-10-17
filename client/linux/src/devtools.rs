@@ -138,6 +138,7 @@ pub fn media_test(args: &[String]) -> Result<()> {
     let receiver = Receiver::new(
         Some("127.0.0.1".parse()?),
         crate::proto::VideoFormat { width: format.width, height: format.height, fps: format.fps },
+        Duration::from_millis(300),
         Sinks {
             video: Box::new({
                 let cam = cam.clone();
@@ -272,6 +273,7 @@ pub fn answer_test(args: &[String]) -> Result<()> {
     let receiver = Receiver::new(
         Some("127.0.0.1".parse()?),
         crate::proto::VideoFormat { width: 1920, height: 1080, fps: 30 },
+        Duration::from_millis(300),
         Sinks { video: Box::new(|_| {}), audio: Box::new(|_| {}) },
         move |e| {
             let _ = tx.send(e);

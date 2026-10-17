@@ -23,8 +23,10 @@ use super::{MicCounters, RATE};
 pub const CHUNK: usize = RATE as usize / 50;
 /// The margin on a calm network...
 const MIN_MARGIN: f64 = RATE as f64 / 100.0;
-/// ...and the most it grows to after stalls.
-const MAX_MARGIN: f64 = RATE as f64 / 5.0;
+/// ...and the most it grows to after stalls. Small: the playout delay
+/// (media::delay) holds audio back against the network; this only covers
+/// the last step, from the synchronized sink to the app.
+const MAX_MARGIN: f64 = RATE as f64 * 0.06;
 /// Added on top of a stall's length when the margin grows (a stall is
 /// measured in whole cycles).
 const SAFETY: f64 = CHUNK as f64;
@@ -267,12 +269,13 @@ mod tests {
 
     #[test]
     fn the_margin_grows_after_a_stall_so_the_next_ones_pass() {
-        // A 150 ms stall every 25 s, like the Wi-Fi in the field.
-        let stalls: Vec<(f64, f64)> = (1..8).map(|i| (i as f64 * 25.0, 0.15)).collect();
-        let (c, margin, _) = simulate(200.0, &stalls);
-        assert_eq!(c.underruns.load(Ordering::Relaxed), 1, "only the first stall should be heard");
-        // ...and the cushion stays while stalls keep coming.
-        assert!(margin > 0.1 * RATE as f64, "margin {margin}");
+        // A 40 ms hiccup every 10 s between the synchronized sink and the
+        // app (network stalls are the playout delay's job).
+        let stalls: Vec<(f64, f64)> = (1..10).map(|i| (i as f64 * 10.0, 0.04)).collect();
+        let (c, margin, _) = simulate(100.0, &stalls);
+        assert!(c.underruns.load(Ordering::Relaxed) <= 1, "only the first one may be heard");
+        // ...and the cushion stays while they keep coming.
+        assert!(margin > MIN_MARGIN, "margin {margin}");
         // Delayed audio is played, not dropped (apart from priming at start).
         assert!(c.skipped_frames.load(Ordering::Relaxed) < CHUNK as u64 * 2);
     }

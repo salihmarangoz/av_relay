@@ -16,6 +16,16 @@ use crate::proto::VideoFormat;
 const IDENTITY_FILE: &str = "identity.key";
 const PAIRED_FILE: &str = "paired.json";
 const SETTINGS_FILE: &str = "settings.json";
+const LEARNED_FILE: &str = "learned.json";
+
+/// What AV Relay learned about this computer's network, to start the next
+/// session with.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct Learned {
+    /// The playout delay the last session ended with.
+    pub playout_delay_ms: Option<u32>,
+}
 
 /// The user's choices.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,6 +155,14 @@ impl Store {
 
     pub fn save_settings(&self, settings: &Settings) -> Result<()> {
         self.write_atomic(SETTINGS_FILE, &serde_json::to_vec_pretty(settings)?)
+    }
+
+    pub fn learned(&self) -> Learned {
+        fs::read(self.dir.join(LEARNED_FILE)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+    }
+
+    pub fn save_learned(&self, learned: &Learned) -> Result<()> {
+        self.write_atomic(LEARNED_FILE, &serde_json::to_vec_pretty(learned)?)
     }
 
     pub fn forget_paired_sender(&self) -> Result<()> {

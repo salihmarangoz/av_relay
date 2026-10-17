@@ -26,11 +26,12 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, watch};
 
 use crate::audio::{self, DefaultInput, MicFeed, MicStats, PipeWire};
+use crate::media::delay::PlayoutDelay;
 use crate::media::{InboundStats, MediaEvent, Receiver, Sinks};
 use crate::proto::pairing::{self, ClientInfo, PairingAttempt};
 use crate::proto::session::{self, SessionError};
 use crate::proto::{CaptureState, ClientMsg, DeviceState, ServerMsg, VideoFormat};
-use crate::store::{PairedSender, Store, hex_encode};
+use crate::store::{Learned, PairedSender, Store, hex_encode};
 use crate::vcam::{self, CamStats, CameraFormat, VirtualCamera};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -38,8 +39,11 @@ const WELCOME_TIMEOUT: Duration = Duration::from_secs(10);
 const PING_EVERY: Duration = Duration::from_secs(5);
 /// How often a session logs its media statistics while an app uses a device.
 const STATS_EVERY: Duration = Duration::from_secs(10);
-/// How often the video delay follows the mic's queue (see `video_delay`).
-const SYNC_EVERY: Duration = Duration::from_secs(1);
+/// How often the playout delay follows the network (see media::delay).
+const SYNC_EVERY: Duration = Duration::from_millis(250);
+/// The playout delay a first session starts with, before it has learned
+/// anything: enough for most Wi-Fi hiccups.
+const FIRST_DELAY: Duration = Duration::from_millis(300);
 const SILENCE_LIMIT: Duration = Duration::from_secs(15);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
 /// While the devices are held for the sender, someone is likely waiting on it
@@ -682,9 +686,15 @@ async fn serve(
     kept.until = None;
     let devices = kept.devices.as_ref().expect("just made sure");
     devices.show_live();
+    // Start where the last session ended: the network is likely the same.
+    let mut playout = PlayoutDelay::new(
+        core.store.learned().playout_delay_ms.map(|ms| Duration::from_millis(ms.into())).unwrap_or(FIRST_DELAY),
+    );
+    log::info!("playout delay {} ms to start", playout.current().as_millis());
     let receiver = Receiver::new(
         Some(local_ip),
         video,
+        playout.current(),
         Sinks {
             video: Box::new({
                 let camera = devices.camera.clone();
@@ -789,7 +799,20 @@ async fn serve(
                 }
             }
             _ = sync_tick.tick() => {
-                receiver.set_video_delay(video_delay(devices.mic_used(), devices.mic.counters().target_frames()));
+                let (audio_spread, video_spread) = receiver.spreads();
+                let spreads: Vec<f64> = [audio_spread, video_spread].into_iter().flatten().collect();
+                let before = playout.current();
+                if let Some(delay) = playout.update(&spreads, SYNC_EVERY) {
+                    let ms = |s: Option<f64>| s.map_or("-".to_string(), |s| format!("{:.0}", s * 1000.0));
+                    let line = format!(
+                        "playout delay {} ms (network spread: audio {} ms, video {} ms)",
+                        delay.as_millis(),
+                        ms(audio_spread),
+                        ms(video_spread)
+                    );
+                    if delay > before { log::info!("{line}") } else { log::debug!("{line}") }
+                }
+                receiver.set_delay(playout.current(), video_offset(devices.mic_used(), devices.mic.counters().target_frames()));
             }
             _ = stats_tick.tick() => {
                 // Taking them resets the counts, also while nothing is in use.
@@ -797,7 +820,14 @@ async fn serve(
                 let mic = devices.mic.counters().take();
                 let inbound = receiver.stats();
                 if devices.camera_used() || devices.mic_used() {
-                    log::info!("{}", stats_line(&inbound, &prev_inbound, cam, mic));
+                    log::info!("{}", stats_line(&inbound, &prev_inbound, cam, mic, playout.current()));
+                    // For the next session.
+                    let learned = Learned { playout_delay_ms: Some(playout.current().as_millis() as u32) };
+                    if core.store.learned() != learned {
+                        if let Err(e) = core.store.save_learned(&learned) {
+                            log::warn!("saving the playout delay: {e:#}");
+                        }
+                    }
                 }
                 prev_inbound = inbound;
             }
@@ -834,24 +864,23 @@ async fn serve(
     }
 }
 
-/// How much longer than audio to hold video back: about as long as audio
-/// waits in the mic's queue (which grows on a stalling network), so the two
-/// stay in step. The queue's target counts one chunk for how audio arrives,
-/// and video decoding takes a little longer than audio's, hence the minus.
-/// Without the mic in use, video only waits its own minimum.
-fn video_delay(mic_used: bool, mic_target_frames: u64) -> Duration {
-    const VIDEO_HEAD_START: Duration = Duration::from_millis(30);
-    if !mic_used {
+/// How much later than the audio's sink the video's goes out: after its
+/// sink, audio still waits in the mic's queue (its target, less half a chunk
+/// on average, since chunks arrive whole), while a frame goes straight to
+/// the camera. Without the mic in use there's nothing to match.
+fn video_offset(mic_used: bool, mic_target_frames: u64) -> Duration {
+    if !mic_used || mic_target_frames == 0 {
         return Duration::ZERO;
     }
-    Duration::from_micros(mic_target_frames * 1_000_000 / audio::RATE as u64).saturating_sub(VIDEO_HEAD_START)
+    let frames = mic_target_frames.saturating_sub(audio::CHUNK as u64 / 2);
+    Duration::from_micros(frames * 1_000_000 / audio::RATE as u64)
 }
 
 /// One log line about the last `STATS_EVERY`: what arrived over the
 /// network (counts since `prev`), and how the camera and mic were fed.
-fn stats_line(now: &[InboundStats], prev: &[InboundStats], cam: Option<CamStats>, mic: MicStats) -> String {
+fn stats_line(now: &[InboundStats], prev: &[InboundStats], cam: Option<CamStats>, mic: MicStats, delay: Duration) -> String {
     let ms = |frames: u64| frames * 1000 / audio::RATE as u64;
-    let mut line = String::from("stats:");
+    let mut line = format!("stats: delay {} ms |", delay.as_millis());
     for s in now {
         let p = prev.iter().find(|p| p.ssrc == s.ssrc).cloned().unwrap_or_default();
         line += &format!(

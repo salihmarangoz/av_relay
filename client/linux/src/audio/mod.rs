@@ -32,6 +32,7 @@ use ringbuf::{HeapCons, HeapProd, HeapRb};
 
 use dll::Dll;
 use playout::Playout;
+pub use playout::CHUNK;
 
 pub use default_input::DefaultInput;
 
