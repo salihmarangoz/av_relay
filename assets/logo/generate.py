@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Draws the AV Relay logo from plain geometry and writes every icon the apps
 need. The motif: a camera lens sending two arcs of signal to the right, i.e.
-the Mac's camera and microphone, relayed.
+one computer's camera and microphone, relayed to another.
 
     python3 -m venv .venv && .venv/bin/pip install -r assets/logo/requirements.txt
     .venv/bin/python assets/logo/generate.py          # writes assets/generated/
@@ -11,13 +11,15 @@ Output (assets/generated/):
 - app-icon.svg, app-icon-<N>.png: the full-colour icon (rounded square)
 - AppIcon.iconset/ and AppIcon.icns: the same for macOS, inside Apple's
   margin with its shadow
-- linux/hicolor/...: the app icon plus symbolic tray icons for three states
-  (off: lens only; on: lens and arcs; live: filled lens and arcs), and an
-  index.theme so a source tree can use them as a theme
-- macos-menubar/: black template images for the menu bar, same three states
+- linux/hicolor/...: the app icon plus symbolic tray icons for four states
+  (off: lens only; on: lens and arcs; live: filled lens and arcs; disabled:
+  the lens struck through), and an index.theme so a source tree can use them
+  as a theme
+- macos-menubar/: black template images for the menu bar, same four states
 
 Everything is drawn at 4x and scaled down, so it doesn't depend on any SVG
-renderer and comes out the same on every machine.
+renderer and comes out the same on every machine. (PNG compression differs
+between platforms, so --check compares PNGs by their pixels.)
 """
 
 import argparse
@@ -45,12 +47,20 @@ DOT_R = 0.080
 LIVE_DOT_R = 0.130
 ARCS = [(0.315, 0.062), (0.425, 0.062)]  # (radius, stroke)
 ARC_SPAN = 42  # degrees either side of 3 o'clock
+# Disabled: a slash from top left to bottom right across the lens, with a
+# transparent gap along its upper side so it reads over the ring.
+SLASH_W, SLASH_GAP = 0.062, 0.045
+# From the lens centre along each axis: the caps end at the ring's bounding
+# box, which keeps them inside the glyph.
+SLASH_REACH = RING_R + RING_W / 2 - SLASH_W / 2
 # The motif sits inside a padded box in the app icon, and fills the
 # glyph icons.
 APP_PAD = 0.20
 GLYPH_PAD = 0.02
 
 SUPERSAMPLE = 4
+
+GLYPH_STATES = ("off", "on", "live", "disabled")
 
 
 def corner_radius(size):
@@ -72,6 +82,24 @@ def motif_parts(state):
         for r, w in ARCS:
             parts.append(("arc", LENS_C, r, w))
     return parts
+
+
+def slash_line(scale, ox, oy, size):
+    """The disabled state's slash: its ends, in pixels."""
+    cx, cy = LENS_C
+    to_px = lambda u, v: (size * (ox + u * scale), size * (oy + v * scale))
+    return to_px(cx - SLASH_REACH, cy - SLASH_REACH), to_px(cx + SLASH_REACH, cy + SLASH_REACH)
+
+
+def slash_polygon(p0, p1, half, shift):
+    """A stroke from p0 to p1 of half-width `half` as a polygon (no caps),
+    moved by `shift` (pixels) along its upper-right normal."""
+    dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+    n = math.hypot(dx, dy)
+    nx, ny = dy / n, -dx / n  # perpendicular, pointing up and right
+    cx, cy = nx * shift, ny * shift
+    return [(p0[0] + nx * half + cx, p0[1] + ny * half + cy), (p1[0] + nx * half + cx, p1[1] + ny * half + cy),
+            (p1[0] - nx * half + cx, p1[1] - ny * half + cy), (p0[0] - nx * half + cx, p0[1] - ny * half + cy)]
 
 
 def motif_bounds():
@@ -146,8 +174,26 @@ def svg_app_icon(size=1024):
 
 
 def svg_glyph(state, colour="#2e3436", size=16):
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 {size} {size}">
+    if state != "disabled":
+        return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 {size} {size}">
   {svg_motif(state, size, GLYPH_PAD, colour)}
+</svg>
+"""
+    scale, ox, oy = placement(GLYPH_PAD)
+    p0, p1 = slash_line(scale, ox, oy, size)
+    w, gap = SLASH_W * size * scale, SLASH_GAP * size * scale
+    pts = lambda poly: " ".join(f"{x:.3f},{y:.3f}" for x, y in poly)
+    cut = slash_polygon(p0, p1, w / 2 + gap / 2, gap / 2)
+    caps = "".join(f'<circle cx="{x:.3f}" cy="{y:.3f}" r="{w / 2:.3f}" fill="{colour}"/>' for x, y in (p0, p1))
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 {size} {size}">
+  <mask id="gap" maskUnits="userSpaceOnUse" x="0" y="0" width="{size}" height="{size}">
+    <rect width="{size}" height="{size}" fill="#ffffff"/>
+    <polygon points="{pts(cut)}" fill="#000000"/>
+  </mask>
+  <g mask="url(#gap)">
+  {svg_motif(state, size, GLYPH_PAD, colour)}
+  </g>
+  <polygon points="{pts(slash_polygon(p0, p1, w / 2, 0))}" fill="{colour}"/>{caps}
 </svg>
 """
 
@@ -181,7 +227,16 @@ def render_glyph(state, size, colour):
     # Draw opaque shapes on a separate layer: the ring's hole must cut
     # through only the motif.
     layer = Image.new("RGBA", (big, big), (0, 0, 0, 0))
-    draw_motif(ImageDraw.Draw(layer), state, big, GLYPH_PAD, colour + (255,))
+    draw = ImageDraw.Draw(layer)
+    draw_motif(draw, state, big, GLYPH_PAD, colour + (255,))
+    if state == "disabled":
+        scale, ox, oy = placement(GLYPH_PAD)
+        p0, p1 = slash_line(scale, ox, oy, big)
+        w, gap = SLASH_W * big * scale, SLASH_GAP * big * scale
+        draw.polygon(slash_polygon(p0, p1, w / 2 + gap / 2, gap / 2), fill=(0, 0, 0, 0))
+        draw.polygon(slash_polygon(p0, p1, w / 2, 0), fill=colour + (255,))
+        for x, y in (p0, p1):
+            draw.ellipse([x - w / 2, y - w / 2, x + w / 2, y + w / 2], fill=colour + (255,))
     return layer.resize((size, size), Image.LANCZOS)
 
 
@@ -264,7 +319,7 @@ def build():
     files[f"{hi}/scalable/apps/{APP_ID}.svg"] = svg_app_icon().encode()
     for n in (16, 32, 48, 64, 128, 256, 512):
         files[f"{hi}/{n}x{n}/apps/{APP_ID}.png"] = pngs[n]
-    for state in ("off", "on", "live"):
+    for state in GLYPH_STATES:
         files[f"{hi}/symbolic/apps/{APP_ID}-{state}-symbolic.svg"] = svg_glyph(state).encode()
         # Bitmaps for trays that don't recolour symbolic SVGs (white on dark panels).
         for n in (22, 44):
@@ -284,11 +339,39 @@ def build():
     files[f"{hi}/index.theme"] = index.encode()
 
     # macOS menu bar: template images (black + alpha; macOS tints them).
-    for state in ("off", "on", "live"):
+    for state in GLYPH_STATES:
         files[f"macos-menubar/menubar-{state}.svg"] = svg_glyph(state, "#000000", 18).encode()
         files[f"macos-menubar/menubar-{state}.png"] = png_bytes(render_glyph(state, 18, (0, 0, 0)))
         files[f"macos-menubar/menubar-{state}@2x.png"] = png_bytes(render_glyph(state, 36, (0, 0, 0)))
     return files
+
+
+def pixels(data):
+    img = Image.open(io.BytesIO(data))
+    return img.size, img.mode, img.tobytes()
+
+
+def icns_entries(data):
+    """An .icns file's entries: [(kind, PNG bytes)]."""
+    entries, at = [], 8
+    while at < len(data):
+        kind, length = data[at:at + 4], struct.unpack(">I", data[at + 4:at + 8])[0]
+        entries.append((kind, data[at + 8:at + length]))
+        at += length
+    return entries
+
+
+def same(path, new, old):
+    """Whether a file on disk matches what the script makes now. PNGs (also
+    inside the .icns) by their pixels: zlib's output differs by platform."""
+    if new == old:
+        return True
+    if path.endswith(".png"):
+        return pixels(new) == pixels(old)
+    if path.endswith(".icns"):
+        a, b = icns_entries(new), icns_entries(old)
+        return len(a) == len(b) and all(ka == kb and pixels(da) == pixels(db) for (ka, da), (kb, db) in zip(a, b))
+    return False
 
 
 def main():
@@ -297,17 +380,22 @@ def main():
     args = ap.parse_args()
     files = build()
     if args.check:
-        stale = [p for p, data in files.items() if not (OUT / p).is_file() or (OUT / p).read_bytes() != data]
+        stale = [p for p, data in files.items() if not (OUT / p).is_file() or not same(p, data, (OUT / p).read_bytes())]
         if stale:
             print("out of date:", *stale, sep="\n  ")
             sys.exit(1)
         print(f"{len(files)} files up to date")
         return
+    written = 0
     for path, data in files.items():
         target = OUT / path
+        # Unchanged files stay as they are, so another platform's zlib doesn't touch them.
+        if target.is_file() and same(path, data, target.read_bytes()):
+            continue
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
-    print(f"wrote {len(files)} files to {OUT.relative_to(ROOT)}")
+        written += 1
+    print(f"wrote {written} of {len(files)} files to {OUT.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":
