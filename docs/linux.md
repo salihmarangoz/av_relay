@@ -94,6 +94,10 @@ in the AV Relay window); this writes
 `~/.config/autostart/io.github.salihmarangoz.avrelay.desktop`, which
 overrides the system entry. Ticking it again removes the override.
 
+At login AV Relay starts minimized: only its icon appears in the top bar.
+To have its window open too, untick **Start minimized**. Opening AV Relay
+from the app grid always shows the window.
+
 ## Troubleshooting
 
 **There's no AV Relay icon in the top bar.** Ubuntu shows tray icons through
@@ -104,8 +108,9 @@ been turned off:
 gnome-extensions enable ubuntu-appindicators@ubuntu.com
 ```
 
-Without it, AV Relay still works; open it from the app grid to see its
-window.
+Without it, AV Relay still works: its window opens by itself after about
+10 seconds, and opening AV Relay from the app grid shows it too. (GNOME also
+hides tray icons while the screen is locked; that time doesn't count.)
 
 **The sender isn't found when pairing.** Both computers must be on the same
 network, and AV Relay must run and be switched on there. Or use the

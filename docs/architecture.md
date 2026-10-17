@@ -135,7 +135,7 @@ has the details; this is the shape.
 
 | part | job |
 |---|---|
-| Tray | StatusNotifierItem (`ksni`; Ubuntu's dock shows it): *Enable AV Relay*, status, *Pair with a sender…*, *Forget*, camera quality, *Keep virtual devices on*, *Start at login*, quit |
+| Tray | StatusNotifierItem (`ksni`; Ubuntu's dock shows it): *Enable AV Relay*, status, *Pair with a sender…*, *Forget*, camera quality, *Keep virtual devices on*, *Start at login*, *Start minimized*, quit |
 | Pair dialog | GTK4: the sender's address and port first (or one found on the network), then the 6-digit code |
 | Control client | framing, Noise (`snow`), CPace (`curve25519-dalek`), keepalive, reconnect (last address, then Bonjour) |
 | Media | GStreamer `webrtcbin` (answerer): H.264 decode → scale/convert → virtual camera; Opus decode → virtual microphone. Both sinks synchronized: everything renders at capture time plus one playout delay (both jitter buffers' latency, set from the spread of arrival minus RTP time over the last minute, 0.2-2 s), lined up by RTCP lip-sync |

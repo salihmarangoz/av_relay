@@ -42,11 +42,13 @@ pub struct Settings {
     /// "Enable AV Relay". Off is as if the app were closed (no connection,
     /// no devices), with the tray icon left to switch it back on.
     pub enabled: bool,
+    /// Started at login, open no window: only the tray icon.
+    pub start_minimized: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { video: VideoFormat { width: 1920, height: 1080, fps: 30 }, autostart_offered: false, keep_devices: false, enabled: true }
+        Self { video: VideoFormat { width: 1920, height: 1080, fps: 30 }, autostart_offered: false, keep_devices: false, enabled: true, start_minimized: true }
     }
 }
 
@@ -248,7 +250,7 @@ mod tests {
     fn settings_default_and_round_trip() {
         let store = temp_store();
         assert_eq!(store.settings().unwrap().video, VideoFormat { width: 1920, height: 1080, fps: 30 });
-        let s = Settings { video: VideoFormat { width: 1280, height: 720, fps: 30 }, autostart_offered: true, keep_devices: true, enabled: false };
+        let s = Settings { video: VideoFormat { width: 1280, height: 720, fps: 30 }, autostart_offered: true, keep_devices: true, enabled: false, start_minimized: false };
         store.save_settings(&s).unwrap();
         assert_eq!(store.settings().unwrap(), s);
         fs::remove_dir_all(store.dir()).unwrap();

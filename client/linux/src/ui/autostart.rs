@@ -67,7 +67,7 @@ fn set_at(system: &Path, path: &Path, enabled: bool) -> Result<()> {
                  Type=Application\n\
                  Name=AV Relay\n\
                  Comment=Use another computer's camera and microphone\n\
-                 Exec={command}\n\
+                 Exec={command} --autostart\n\
                  Icon={APP_ID}\n\
                  Terminal=false\n\
                  X-GNOME-Autostart-enabled=true\n"
@@ -94,6 +94,7 @@ mod tests {
         assert!(!is_enabled_at(&system, &user));
         set_at(&system, &user, true).unwrap();
         assert!(is_enabled_at(&system, &user));
+        assert!(fs::read_to_string(&user).unwrap().contains(" --autostart\n"));
         set_at(&system, &user, false).unwrap();
         assert!(!user.exists() && !is_enabled_at(&system, &user));
 
