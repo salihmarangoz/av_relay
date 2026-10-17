@@ -8,10 +8,19 @@
 #import "AVRWebRTCSupport.h"
 #import "RTCAudioDevice.h"
 
+#import <WebRTC/RTCFieldTrials.h>
+
 NSError *AVRSetCodecPreferences(id<RTCRtpTransceiver> transceiver, NSArray<RTCRtpCodecCapability *> *codecs) {
     NSError *error = nil;
     if ([transceiver setCodecPreferences:codecs error:&error]) {
         return nil;
     }
     return error ?: [NSError errorWithDomain:@"av-relay.webrtc" code:1 userInfo:nil];
+}
+
+void AVRSetAudioRedundancy(NSInteger frames) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    RTCInitFieldTrialDictionary(@{@"WebRTC-Audio-Red-For-Opus": [NSString stringWithFormat:@"Enabled-%ld", (long)frames]});
+#pragma clang diagnostic pop
 }

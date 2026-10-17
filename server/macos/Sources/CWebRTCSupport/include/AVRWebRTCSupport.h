@@ -12,4 +12,11 @@ NS_ASSUME_NONNULL_BEGIN
 /// Returns nil on success.
 NSError *_Nullable AVRSetCodecPreferences(id<RTCRtpTransceiver> transceiver, NSArray<RTCRtpCodecCapability *> *codecs);
 
+/// How many earlier Opus frames each RED audio packet carries (1 to 9;
+/// libwebrtc's default is 1). Process-wide: call it before creating the
+/// first RTCPeerConnectionFactory. It sets libwebrtc's field trial
+/// WebRTC-Audio-Red-For-Opus, which the Objective-C API can only set
+/// through a deprecated global (its replacement is C++ only).
+void AVRSetAudioRedundancy(NSInteger frames);
+
 NS_ASSUME_NONNULL_END

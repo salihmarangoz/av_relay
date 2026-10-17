@@ -56,7 +56,10 @@ hardware (VA-API, NVDEC) or software (libavcodec). VP8, VP9 and AV1 would be
 software-encoded on a Mac, and HEVC is not a WebRTC baseline codec.
 
 **Audio: Opus**, mono 48 kHz, 20 ms frames, in-band FEC: the standard for
-real-time voice, built into libwebrtc and GStreamer. The sender's echo
+real-time voice, built into libwebrtc and GStreamer. Sent as RED (RFC 2198)
+when the receiver takes it: each packet also carries the two frames before
+it, so lost packets are filled at once instead of waiting for a resend;
+voice matters more than its ~70 kbit/s extra. The sender's echo
 cancellation, gain control and noise suppression are off: the conferencing
 app on the receiver runs its own and has the far-end signal.
 

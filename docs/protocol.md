@@ -368,6 +368,14 @@ sequenceDiagram
 control and noise suppression are **off** by default: the app on the
 client side runs its own, and it has the far-end reference.
 
+**Audio redundancy: RED** (RFC 2198) around Opus. The server offers
+`red/48000/2` (`a=fmtp:<red> <opus>/<opus>`) before Opus, and each RED
+packet carries the current Opus frame and the two before it, so a client
+recovers up to two lost packets in a row at once, without a round trip.
+The client SHOULD accept `red` (put it first in its answer) and decode
+it; a client that answers Opus alone gets plain Opus. RED's payload is
+about three times Opus alone (~100 kbit/s at 32 kbit/s Opus).
+
 **Header extensions:** `urn:ietf:params:rtp-hdrext:sdes:mid`,
 `http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01`,
 `http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time`. The client
@@ -378,7 +386,7 @@ which adapts the bitrate to the Wi-Fi.
 1080p30 (scaled by pixel rate for other formats), floor 300 kbit/s. The
 call app on the client re-encodes our stream, so we start from a clean
 picture; GCC still backs off when the Wi-Fi can't carry it. Opus runs at
-about 40 kbit/s.
+about 40 kbit/s, or about 100 kbit/s as RED with two earlier frames.
 
 ### 8.3 Format
 

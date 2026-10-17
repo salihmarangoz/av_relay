@@ -86,9 +86,20 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
         return logger
     }()
 
+    /// Audio goes as RED (RFC 2198) around Opus when the receiver accepts it:
+    /// every packet also carries the two Opus frames before it, so a
+    /// receiver fills up to two lost packets in a row at once, without
+    /// waiting for anything. About 100 kbit/s instead of 32.
+    static let audioRedundancy = 2
+    /// libwebrtc's process-wide settings, before the first factory.
+    private static let configureWebRTC: Void = {
+        RTCInitializeSSL()
+        AVRSetAudioRedundancy(audioRedundancy)
+    }()
+
     public init(settings: Settings = Settings()) {
         self.settings = settings
-        RTCInitializeSSL()
+        _ = Self.configureWebRTC
         microphone = MicrophoneDevice(source: settings.microphone)
         factory = RTCPeerConnectionFactory(encoderFactory: H264EncoderFactory(),
                                            decoderFactory: RTCDefaultVideoDecoderFactory(), audioDevice: microphone)
@@ -146,7 +157,7 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
                                                  "retransmittedPacketsSent", "encoderImplementation"]))
         }
         for v in values("outbound-rtp", kind: "audio") {
-            lines.append("audio out: " + show(v, ["packetsSent", "targetBitrate", "nackCount", "retransmittedPacketsSent"]))
+            lines.append("audio out: " + show(v, ["packetsSent", "bytesSent", "targetBitrate", "nackCount", "retransmittedPacketsSent"]))
         }
         for v in values("remote-inbound-rtp") {
             lines.append("\(v["kind"] ?? "?" as NSString) as received: " + show(v, ["packetsLost", "fractionLost", "jitter", "roundTripTime"]))
@@ -346,7 +357,9 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
             ], optionalConstraints: nil)
             let audioTrack = engine.factory.audioTrack(with: engine.factory.audioSource(with: processingOff), trackId: "microphone")
             let audio = peer.addTransceiver(with: audioTrack, init: audioInit)
-            let opus = engine.factory.rtpSenderCapabilities(forKind: kRTCMediaStreamTrackKindAudio).codecs.filter { $0.name == "opus" }
+            // RED first: a receiver that doesn't take it answers plain Opus.
+            let audioCodecs = engine.factory.rtpSenderCapabilities(forKind: kRTCMediaStreamTrackKindAudio).codecs
+            let opus = audioCodecs.filter { $0.name == "red" } + audioCodecs.filter { $0.name == "opus" }
             if let audio, let error = AVRSetCodecPreferences(audio, opus) {
                 log.error("Opus codec preference: \(error.localizedDescription, privacy: .public)")
             }

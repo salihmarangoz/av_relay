@@ -5,6 +5,7 @@
 // and microphone, which only an app bundle may open.
 
 import AVRelayCore
+import CWebRTCSupport
 import Foundation
 import WebRTC
 
@@ -62,6 +63,12 @@ final class LoopbackClient: NSObject, SignalingChannel, RTCPeerConnectionDelegat
     var errors: [Message] { lock.withLock { _errors } }
     var connected: Bool { lock.withLock { _connected } }
     var localAddress: String? { nil }
+    /// The audio codecs to accept, by name (nil: whatever libwebrtc takes),
+    /// e.g. ["opus"] to answer as a receiver without RED would.
+    var audioCodecs: [String]?
+    private var _answer: String?
+    /// The last answer sent (tests).
+    var answer: String? { lock.withLock { _answer } }
 
     init(engine: MediaEngine) {
         self.engine = engine
@@ -95,8 +102,13 @@ final class LoopbackClient: NSObject, SignalingChannel, RTCPeerConnectionDelegat
                 track.add(frames)
                 videoTrack = track
             }
+            if let names = audioCodecs, let audio = peer.transceivers.first(where: { $0.mediaType == .audio }) {
+                let codecs = factory.rtpReceiverCapabilities(forKind: kRTCMediaStreamTrackKindAudio).codecs.filter { names.contains($0.name) }
+                _ = AVRSetCodecPreferences(audio, codecs)
+            }
             let answer = try await peer.answer(for: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil))
             try await peer.setLocalDescription(answer)
+            lock.withLock { _answer = answer.sdp }
             engine.receive(.answer(sdp: answer.sdp), from: self)
         case let .ice(candidate, mid, index):
             guard !candidate.isEmpty else { return }

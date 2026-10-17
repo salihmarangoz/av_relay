@@ -36,6 +36,10 @@ The first release.
 - **Security**: the control channel is Noise IK with the keys from pairing
   (CPace, then Noise XXpsk3); media is DTLS-SRTP, authenticated through it.
   No account, no cloud.
+- **Audio redundancy**: each audio packet also carries the two before it
+  (RED, RFC 2198), so a lost packet doesn't break the sound (about
+  100 kbit/s instead of 32). A receiver that doesn't support it gets plain
+  Opus.
 - Protocol version 1 (`av-relay/1`, docs/protocol.md).
 
 [Unreleased]: https://github.com/salihmarangoz/av_relay/commits/main
