@@ -19,6 +19,9 @@ public enum MicrophoneSource: Sendable, Equatable {
     case device(id: String?)
     /// A 440 Hz tone, for tests: no hardware, no permission prompt.
     case testTone
+    /// Silence with a 50 ms 1 kHz beep every 2 s, at the camera `syncTest`'s
+    /// white frames (SyncTestSignal).
+    case syncTest
 }
 
 final class MicrophoneDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
@@ -53,6 +56,7 @@ final class MicrophoneDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
     static func deviceName(for source: MicrophoneSource) -> String? {
         switch source {
         case .testTone: return "Test tone"
+        case .syncTest: return "Sync test (a beep every 2 s)"
         case .device(let id): return captureDevice(id: id)?.localizedName
         }
     }
@@ -159,6 +163,7 @@ final class MicrophoneDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
         let started = generation
         switch source {
         case .testTone: startTone()
+        case .syncTest: startSyncTest()
         case .device(let id): startDevice(id: id, generation: started)
         }
         // A microphone that never delivers is a failure, not "starting" forever.
@@ -234,6 +239,33 @@ final class MicrophoneDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
             phase = phase.truncatingRemainder(dividingBy: 2 * .pi)
             buffer.withUnsafeMutableBufferPointer { deliver($0.baseAddress!, frames: frames, hostTime: mach_absolute_time()) }
         }
+        self.timer = timer
+        timer.resume()
+    }
+
+    /// SyncTestSignal's audio in 10 ms chunks on the host clock: each goes out
+    /// once its last sample's time has come, stamped with its first sample's
+    /// time, as a microphone's would be.
+    private func startSyncTest() {
+        var next = SyncTestSignal.chunksDone(by: SyncTestSignal.nowNs)
+        var buffer = [Int16](repeating: 0, count: Int(SyncTestSignal.chunkFrames))
+        let due = { DispatchTime(uptimeNanoseconds: SyncTestSignal.chunkTime(next + 1)) }
+        let timer = DispatchSource.makeTimerSource(flags: .strict, queue: queue)
+        timer.setEventHandler { [self] in
+            let done = SyncTestSignal.chunksDone(by: SyncTestSignal.nowNs)
+            // A microphone keeps what it captured during a short stall; a long one is lost.
+            next = max(next, done.saturatingSubtract(50))
+            while next < done {
+                buffer.withUnsafeMutableBufferPointer { samples in
+                    SyncTestSignal.fillChunk(next, into: samples)
+                    deliver(samples.baseAddress!, frames: samples.count,
+                            hostTime: SyncTestSignal.nsToHostTicks(SyncTestSignal.chunkTime(next)))
+                }
+                next += 1
+            }
+            self.timer?.schedule(deadline: due(), leeway: .microseconds(200))
+        }
+        timer.schedule(deadline: due(), leeway: .microseconds(200))
         self.timer = timer
         timer.resume()
     }

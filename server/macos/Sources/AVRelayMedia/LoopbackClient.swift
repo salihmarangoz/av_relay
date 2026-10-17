@@ -8,20 +8,38 @@ import AVRelayCore
 import Foundation
 import WebRTC
 
-/// Counts decoded frames and remembers the last size.
+/// Counts decoded frames, remembers the last size, and counts bright ones
+/// (the sync test's flashes) by the luma at the centre.
 final class FrameCounter: NSObject, RTCVideoRenderer, @unchecked Sendable {
     private let lock = NSLock()
     private var _count = 0
+    private var _bright = 0
     private var _size = CGSize.zero
     var count: Int { lock.withLock { _count } }
+    var brightCount: Int { lock.withLock { _bright } }
     var size: CGSize { lock.withLock { _size } }
     func setSize(_ size: CGSize) {}
     func renderFrame(_ frame: RTCVideoFrame?) {
         guard let frame else { return }
+        let bright = Self.centreLuma(frame) > 128
         lock.withLock {
             _count += 1
+            if bright { _bright += 1 }
             _size = CGSize(width: Int(frame.width), height: Int(frame.height))
         }
+    }
+
+    private static func centreLuma(_ frame: RTCVideoFrame) -> UInt8 {
+        if let cv = frame.buffer as? RTCCVPixelBuffer, CVPixelBufferGetPlaneCount(cv.pixelBuffer) >= 1 {
+            let buffer = cv.pixelBuffer
+            CVPixelBufferLockBaseAddress(buffer, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+            guard let base = CVPixelBufferGetBaseAddressOfPlane(buffer, 0) else { return 0 }
+            let row = CVPixelBufferGetHeightOfPlane(buffer, 0) / 2, col = CVPixelBufferGetWidthOfPlane(buffer, 0) / 2
+            return base.load(fromByteOffset: row * CVPixelBufferGetBytesPerRowOfPlane(buffer, 0) + col, as: UInt8.self)
+        }
+        let i420 = frame.buffer.toI420()
+        return i420.dataY[Int(i420.height / 2) * Int(i420.strideY) + Int(i420.width / 2)]
     }
 }
 

@@ -4,9 +4,11 @@
 // `media` with made-up states, so a client's on-demand logic can be
 // exercised. With --media test, the real media engine (libwebrtc, H.264 and
 // Opus) sends a moving test pattern and a 440 Hz tone instead of the camera
-// and microphone, so a client's WebRTC side can be tested too.
+// and microphone, so a client's WebRTC side can be tested too. With --media
+// sync it sends a white frame and a beep every 2 s, captured at the same
+// instant, for measuring A/V sync at the client.
 //
-//   swift run avrelay-devserver [--port 48100] [--dir DIR] [--name NAME] [--media test]
+//   swift run avrelay-devserver [--port 48100] [--dir DIR] [--name NAME] [--media test|sync]
 //
 // Then type `pair` for a code. Commands: pair, close, list, remove ID, stats, quit.
 
@@ -43,7 +45,8 @@ setvbuf(stdout, nil, _IOLBF, 0)  // line by line, also into a pipe
 var port: UInt16 = 48100
 var directory = FileManager.default.temporaryDirectory.appendingPathComponent("av-relay-devserver")
 var name = Host.current().localizedName ?? "AV Relay sender"
-var testMedia = false
+/// nil: no media engine; else the camera and microphone sources.
+var testMedia: (camera: CameraSource, microphone: MicrophoneSource, label: String)?
 var arguments = CommandLine.arguments.dropFirst()
 while let flag = arguments.popFirst() {
     switch flag {
@@ -52,9 +55,12 @@ while let flag = arguments.popFirst() {
     case "--name": name = arguments.popFirst() ?? name
     case "--media" where arguments.first == "test":
         arguments.removeFirst()
-        testMedia = true
+        testMedia = (.testPattern, .testTone, "test pattern + tone")
+    case "--media" where arguments.first == "sync":
+        arguments.removeFirst()
+        testMedia = (.syncTest, .syncTest, "a flash and a beep every 2 s")
     default:
-        print("usage: avrelay-devserver [--port N] [--dir DIR] [--name NAME] [--media test]")
+        print("usage: avrelay-devserver [--port N] [--dir DIR] [--name NAME] [--media test|sync]")
         exit(2)
     }
 }
@@ -65,10 +71,10 @@ configuration.port = port
 let server = RelayServer(configuration: configuration, store: store)
 let handler: any SessionHandler
 var mediaEngine: MediaEngine?
-if testMedia {
+if let testMedia {
     var settings = MediaEngine.Settings()
-    settings.camera = .testPattern
-    settings.microphone = .testTone
+    settings.camera = testMedia.camera
+    settings.microphone = testMedia.microphone
     let engine = MediaEngine(settings: settings)
     engine.onStatus = { status in print("media: camera \(status.video.state), microphone \(status.audio.state)") }
     mediaEngine = engine
@@ -78,7 +84,7 @@ if testMedia {
 }
 await server.setHandler(handler)
 let listening = try await server.start()
-print("AV Relay dev server: TCP \(listening), device id \(store.deviceID), state in \(directory.path), media: \(testMedia ? "test pattern + tone" : "none")")
+print("AV Relay dev server: TCP \(listening), device id \(store.deviceID), state in \(directory.path), media: \(testMedia?.label ?? "none")")
 print("commands: pair, close, list, remove ID, stats, quit")
 
 Task {
