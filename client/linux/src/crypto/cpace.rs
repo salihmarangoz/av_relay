@@ -195,7 +195,7 @@ mod tests {
         let server = Cpace::with_scalar(&h("PRS"), &ci, &sid, &hex32(&p["yb"]), false);
         assert_eq!(server.finish(&h("Ya"), b"", b"").unwrap().to_vec(), h("ISK"));
 
-        // The client's ISK when the Mac holds another code: a different key.
+        // The client's ISK when the sender holds another code: a different key.
         let wrong_server = Cpace::with_scalar(b"042138", &ci, &sid, &hex32(&p["yb"]), false);
         let client = Cpace::with_scalar(&h("PRS"), &ci, &sid, &hex32(&p["ya"]), true);
         let isk = client.finish(&wrong_server.share(), b"", b"").unwrap();

@@ -85,8 +85,9 @@ More, including troubleshooting: [docs/linux.md](docs/linux.md).
    a sender…**. Under **Auto-discovery**, pick the sender (or type its
    address and port under **Manual**), click **Continue**, and type the code.
 
-That's it. The sender's pairing window closes on its own, and from now on
-the two connect by themselves whenever both are on. A receiver uses one
+That's it. The sender's pairing window then shows **Paired with** and the
+receiver's name; from now on the two connect by themselves whenever both
+are on. A receiver uses one
 sender; a sender can be paired with several receivers and serves one at a
 time.
 
