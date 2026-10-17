@@ -49,3 +49,41 @@ fn is_link_local(addr: &IpAddr) -> bool {
         IpAddr::V6(a) => (a.segments()[0] & 0xffc0) == 0xfe80,
     }
 }
+
+/// An AV Relay Mac found on the network.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoundMac {
+    pub name: String,
+    pub address: IpAddr,
+    pub port: u16,
+    pub device_id: Option<String>,
+}
+
+/// Lists the AV Relay Macs that answer within `wait`, to offer them when
+/// pairing. Blocking.
+pub fn browse(wait: Duration) -> Vec<FoundMac> {
+    let Ok(daemon) = ServiceDaemon::new() else { return Vec::new() };
+    let mut found: Vec<FoundMac> = Vec::new();
+    if let Ok(events) = daemon.browse(SERVICE) {
+        let deadline = Instant::now() + wait;
+        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+            let Ok(event) = events.recv_timeout(left) else { break };
+            let ServiceEvent::ServiceResolved(service) = event else { continue };
+            let mut addrs: Vec<IpAddr> = service.get_addresses().iter().map(|a| a.to_ip_addr()).collect();
+            addrs.sort_by_key(|a| (!a.is_ipv4(), a.to_string()));
+            let Some(address) = addrs.into_iter().find(|a| !is_link_local(a)) else { continue };
+            let name = service.fullname.strip_suffix(&format!(".{SERVICE}")).unwrap_or(&service.fullname).replace("\\ ", " ");
+            let mac = FoundMac {
+                name,
+                address,
+                port: service.get_port(),
+                device_id: service.get_property_val_str("id").map(str::to_owned),
+            };
+            if !found.contains(&mac) {
+                found.push(mac);
+            }
+        }
+    }
+    let _ = daemon.shutdown();
+    found
+}

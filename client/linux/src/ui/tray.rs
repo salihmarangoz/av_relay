@@ -1,0 +1,183 @@
+//! The tray icon and its menu (StatusNotifierItem, which Ubuntu's dock
+//! shows). Everything it does goes to the GTK side as a [`UiEvent`].
+
+use crate::app::{Device, Status};
+use crate::proto::{CaptureState, VideoFormat};
+
+use super::{APP_ID, UiEvent, icons};
+
+pub const FULL_HD: VideoFormat = VideoFormat { width: 1920, height: 1080, fps: 30 };
+pub const HD: VideoFormat = VideoFormat { width: 1280, height: 720, fps: 30 };
+
+pub struct Tray {
+    pub status: Status,
+    pub problems: Vec<String>,
+    pub autostart: bool,
+    pub video: VideoFormat,
+    pub events: async_channel::Sender<UiEvent>,
+}
+
+impl Tray {
+    fn send(&self, event: UiEvent) {
+        let _ = self.events.try_send(event);
+    }
+
+    fn mac_name(&self) -> Option<&str> {
+        match &self.status {
+            Status::Searching { mac, .. } | Status::Connected { mac, .. } => Some(mac),
+            _ => None,
+        }
+    }
+
+    fn headline(&self) -> String {
+        match &self.status {
+            Status::Starting => "Starting…".into(),
+            Status::NotPaired => "Not paired with a Mac".into(),
+            Status::Searching { mac, .. } => format!("Looking for {mac}…"),
+            Status::Connected { mac, .. } => format!("Connected to {mac}"),
+        }
+    }
+
+    fn state(&self) -> &'static str {
+        match &self.status {
+            Status::Connected { camera, mic, .. } if camera.used_here || mic.used_here => "live",
+            Status::Connected { .. } => "on",
+            _ => "off",
+        }
+    }
+}
+
+/// "Camera: in use", "Microphone: ready", "Camera: in use (Mac: no permission)".
+fn device_line(what: &str, d: &Device) -> String {
+    let mac = match (d.state, d.error.as_deref()) {
+        (Some(CaptureState::Error), Some(err)) => format!(" (Mac: {})", err.replace('-', " ")),
+        (Some(CaptureState::Error), None) => " (Mac: error)".into(),
+        (Some(CaptureState::Starting), _) if d.used_here => " (starting…)".into(),
+        _ => String::new(),
+    };
+    format!("{what}: {}{mac}", if d.used_here { "in use" } else { "ready" })
+}
+
+impl ksni::Tray for Tray {
+    const MENU_ON_ACTIVATE: bool = true;
+
+    fn id(&self) -> String {
+        APP_ID.into()
+    }
+
+    fn title(&self) -> String {
+        "AV Relay".into()
+    }
+
+    fn icon_theme_path(&self) -> String {
+        icons::theme_path()
+    }
+
+    fn icon_name(&self) -> String {
+        format!("{APP_ID}-{}-symbolic", self.state())
+    }
+
+    fn tool_tip(&self) -> ksni::ToolTip {
+        ksni::ToolTip { title: "AV Relay".into(), description: self.headline(), ..Default::default() }
+    }
+
+    fn watcher_online(&self) {
+        self.send(UiEvent::TrayAvailable(true));
+    }
+
+    fn watcher_offline(&self, _reason: ksni::OfflineReason) -> bool {
+        self.send(UiEvent::TrayAvailable(false));
+        // Keep the service: the host may come back (e.g. GNOME restarted).
+        true
+    }
+
+    fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
+        use ksni::menu::*;
+        let mut items: Vec<ksni::MenuItem<Self>> = Vec::new();
+        let info = |label: String| StandardItem { label, enabled: false, ..Default::default() }.into();
+        items.push(info(self.headline()));
+        if let Status::Searching { last_error: Some(e), .. } = &self.status {
+            items.push(info(shorten(e, 60)));
+        }
+        if let Status::Connected { camera, mic, .. } = &self.status {
+            items.push(info(device_line("Camera", camera)));
+            items.push(info(device_line("Microphone", mic)));
+        }
+        for p in &self.problems {
+            items.push(info(shorten(p, 70)));
+        }
+        items.push(MenuItem::Separator);
+
+        let paired = !matches!(self.status, Status::NotPaired | Status::Starting);
+        items.push(
+            StandardItem {
+                label: if paired { "Pair with another Mac…".into() } else { "Pair with a Mac…".into() },
+                activate: Box::new(|t: &mut Self| t.send(UiEvent::OpenPair)),
+                ..Default::default()
+            }
+            .into(),
+        );
+        if let Some(mac) = self.mac_name() {
+            items.push(
+                StandardItem {
+                    label: format!("Forget {mac}…"),
+                    activate: Box::new(|t: &mut Self| t.send(UiEvent::ConfirmForget)),
+                    ..Default::default()
+                }
+                .into(),
+            );
+        }
+        items.push(
+            SubMenu {
+                label: "Camera quality".into(),
+                submenu: vec![
+                    RadioGroup {
+                        selected: if self.video == HD { 1 } else { 0 },
+                        select: Box::new(|t: &mut Self, i| {
+                            let video = if i == 1 { HD } else { FULL_HD };
+                            t.video = video;
+                            t.send(UiEvent::SetVideo(video));
+                        }),
+                        options: vec![
+                            RadioItem { label: "1080p, 30 fps".into(), ..Default::default() },
+                            RadioItem { label: "720p, 30 fps".into(), ..Default::default() },
+                        ],
+                    }
+                    .into(),
+                ],
+                ..Default::default()
+            }
+            .into(),
+        );
+        items.push(
+            CheckmarkItem {
+                label: "Start at login".into(),
+                checked: self.autostart,
+                activate: Box::new(|t: &mut Self| {
+                    t.autostart = !t.autostart;
+                    t.send(UiEvent::SetAutostart(t.autostart));
+                }),
+                ..Default::default()
+            }
+            .into(),
+        );
+        items.push(MenuItem::Separator);
+        items.push(
+            StandardItem {
+                label: "Quit".into(),
+                activate: Box::new(|t: &mut Self| t.send(UiEvent::Quit)),
+                ..Default::default()
+            }
+            .into(),
+        );
+        items
+    }
+}
+
+fn shorten(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(max - 1).collect::<String>())
+    }
+}

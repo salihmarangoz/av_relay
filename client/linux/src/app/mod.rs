@@ -60,7 +60,7 @@ pub struct Device {
 /// What the UI asks of the core.
 #[derive(Debug)]
 pub enum Command {
-    /// A new pairing was saved: connect to it.
+    /// A new pairing was saved, or a setting changed: (re)connect.
     Paired,
     /// Remove the pairing (on the Mac too, if it's connected).
     Forget,
@@ -76,7 +76,6 @@ pub struct Core {
     pw: PipeWire,
     default_input: DefaultInput,
     camera_nr: Option<u32>,
-    video: VideoFormat,
     problems: Vec<String>,
 }
 
@@ -99,8 +98,7 @@ impl Core {
                 None
             }
         };
-        let video = store.settings().unwrap_or_default().video;
-        Ok(Arc::new(Self { store, pw, default_input, camera_nr, video, problems }))
+        Ok(Arc::new(Self { store, pw, default_input, camera_nr, problems }))
     }
 
     pub fn store(&self) -> &Store {
@@ -339,9 +337,11 @@ async fn serve(
     mut ctl: mpsc::UnboundedReceiver<Ctl>,
 ) -> Result<Ended> {
     let me = core.store.identity()?;
+    // Read per session, so a changed setting applies at the next connection.
+    let video: VideoFormat = core.store.settings().unwrap_or_default().video;
     let (mut reader, mut writer) = session::connect(stream, &me, &mac.key()?).await?;
     let info = Core::client_info();
-    writer.send(&ClientMsg::Hello { name: info.name, app: info.app, video: core.video }).await?;
+    writer.send(&ClientMsg::Hello { name: info.name, app: info.app, video }).await?;
 
     // Reading isn't cancel-safe (a frame read half-way would be lost), so a
     // task of its own reads and forwards; everything else is one select.
@@ -382,7 +382,7 @@ async fn serve(
     // The devices exist from now on, until this function returns.
     let camera = match core.camera_nr {
         Some(nr) => {
-            let format = CameraFormat { width: core.video.width, height: core.video.height, fps: core.video.fps };
+            let format = CameraFormat { width: video.width, height: video.height, fps: video.fps };
             let tx = tx.clone();
             match VirtualCamera::open(nr, format, move |used| {
                 let _ = tx.send(Event::CameraUsed(used));
@@ -409,7 +409,7 @@ async fn serve(
     let _default_input = DefaultInputGuard(core);
     let receiver = Receiver::new(
         Some(local_ip),
-        core.video,
+        video,
         Sinks {
             video: Box::new({
                 let camera = camera.clone();
