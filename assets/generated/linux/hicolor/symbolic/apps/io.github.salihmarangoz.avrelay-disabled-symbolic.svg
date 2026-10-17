@@ -1,11 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
-  <mask id="gap" maskUnits="userSpaceOnUse" x="0" y="0" width="16" height="16">
-    <rect width="16" height="16" fill="#ffffff"/>
-    <polygon points="2.229,2.398 11.012,11.181 9.308,12.885 0.524,4.102" fill="#000000"/>
-  </mask>
-  <g mask="url(#gap)">
+  <clipPath id="gap">
+    <path clip-rule="evenodd" d="M 0 0 H 16 V 16 H 0 Z M 2.229 2.398 L 11.012 11.181 L 9.308 12.885 L 0.524 4.102 Z"/>
+  </clipPath>
+  <g clip-path="url(#gap)">
   <path fill="#2e3436" fill-rule="evenodd" d="M 0.320 8.000 a 5.090 5.090 0 1 0 10.180 0 a 5.090 5.090 0 1 0 -10.180 0 Z M 1.716 8.000 a 3.694 3.694 0 1 0 7.387 0 a 3.694 3.694 0 1 0 -7.387 0 Z"/>
   <circle cx="5.410" cy="8.000" r="1.802" fill="#2e3436"/>
   </g>
-  <polygon points="1.512,3.115 10.295,11.898 9.308,12.885 0.524,4.102" fill="#2e3436"/><circle cx="1.018" cy="3.608" r="0.698" fill="#2e3436"/><circle cx="9.802" cy="12.392" r="0.698" fill="#2e3436"/>
+  <path fill="#2e3436" d="M 1.512 3.115 L 10.295 11.898 L 9.308 12.885 L 0.524 4.102 Z"/><circle cx="1.018" cy="3.608" r="0.698" fill="#2e3436"/><circle cx="9.802" cy="12.392" r="0.698" fill="#2e3436"/>
 </svg>

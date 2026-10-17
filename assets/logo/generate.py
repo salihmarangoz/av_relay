@@ -182,18 +182,21 @@ def svg_glyph(state, colour="#2e3436", size=16):
     scale, ox, oy = placement(GLYPH_PAD)
     p0, p1 = slash_line(scale, ox, oy, size)
     w, gap = SLASH_W * size * scale, SLASH_GAP * size * scale
-    pts = lambda poly: " ".join(f"{x:.3f},{y:.3f}" for x, y in poly)
+    # Only <path> and <circle>, and the gap as a clip: a symbolic icon gets
+    # recoloured by forcing the fill of its shapes (GNOME Shell's tray does
+    # it for rect, circle and path only), which would also hit a mask's
+    # content. A clip uses only the geometry.
+    poly = lambda pts: "M " + " L ".join(f"{x:.3f} {y:.3f}" for x, y in pts) + " Z"
     cut = slash_polygon(p0, p1, w / 2 + gap / 2, gap / 2)
     caps = "".join(f'<circle cx="{x:.3f}" cy="{y:.3f}" r="{w / 2:.3f}" fill="{colour}"/>' for x, y in (p0, p1))
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 {size} {size}">
-  <mask id="gap" maskUnits="userSpaceOnUse" x="0" y="0" width="{size}" height="{size}">
-    <rect width="{size}" height="{size}" fill="#ffffff"/>
-    <polygon points="{pts(cut)}" fill="#000000"/>
-  </mask>
-  <g mask="url(#gap)">
+  <clipPath id="gap">
+    <path clip-rule="evenodd" d="M 0 0 H {size} V {size} H 0 Z {poly(cut)}"/>
+  </clipPath>
+  <g clip-path="url(#gap)">
   {svg_motif(state, size, GLYPH_PAD, colour)}
   </g>
-  <polygon points="{pts(slash_polygon(p0, p1, w / 2, 0))}" fill="{colour}"/>{caps}
+  <path fill="{colour}" d="{poly(slash_polygon(p0, p1, w / 2, 0))}"/>{caps}
 </svg>
 """
 
