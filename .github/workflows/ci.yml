@@ -1,0 +1,43 @@
+# Build and test on every push. The Linux client adds its job here (T10).
+name: CI
+
+on:
+  push:
+    branches: [main, "task/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  vectors:
+    name: Shared test vectors are current
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get install -y --no-install-recommends libsodium23
+      - run: python3 -m venv .venv-vectors && .venv-vectors/bin/pip install -q -r tests/vectors/requirements.txt
+      - run: .venv-vectors/bin/python -I tests/vectors/generate.py --check
+
+  macos:
+    name: Mac app
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: server/macos
+    steps:
+      - uses: actions/checkout@v7
+      - run: xcodebuild -version && swift --version
+      - name: Test (protocol vectors, server end to end, media loopback with test sources)
+        run: swift test
+      - name: Build AV Relay.app, .zip and .dmg (Apple silicon + Intel, ad hoc signed)
+        if: hashFiles('server/macos/scripts/build-app.sh') != ''
+        run: scripts/build-app.sh --version "0.0.0-ci.${GITHUB_RUN_NUMBER}" --out build
+      - if: hashFiles('server/macos/scripts/build-app.sh') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-app
+          path: |
+            server/macos/build/AV-Relay-*-macOS.zip
+            server/macos/build/AV-Relay-*-macOS.dmg
+          retention-days: 7

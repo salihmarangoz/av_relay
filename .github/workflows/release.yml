@@ -1,0 +1,48 @@
+# On a version tag (v1.2.3): build both apps and publish them as a GitHub
+# Release. The Linux client adds its .deb job here and to `needs` (T10).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: Mac app
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: server/macos
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # the build number counts commits
+      - run: swift test
+      - run: scripts/build-app.sh --version "${GITHUB_REF_NAME#v}" --out build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-macos
+          path: |
+            server/macos/build/AV-Relay-*-macOS.zip
+            server/macos/build/AV-Relay-*-macOS.dmg
+
+  publish:
+    name: Publish the release
+    needs: [macos]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Create the release with every artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l dist
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --title "AV Relay ${GITHUB_REF_NAME#v}" --generate-notes
