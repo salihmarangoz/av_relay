@@ -18,24 +18,43 @@ cd "$(dirname "$0")/.."
 
 version="0.0.0-dev"
 out="build"
-archs=(--arch arm64 --arch x86_64)
+archs="arm64 x86_64"
 while (($#)); do
 	case $1 in
 	--version) version=$2; shift 2 ;;
 	--out) out=$2; shift 2 ;;
-	--native) archs=(); shift ;;
+	--native) archs=""; shift ;;
 	*) echo "usage: $0 [--version X.Y.Z] [--out DIR] [--native]" >&2; exit 2 ;;
 	esac
 done
 build=$(git rev-list --count HEAD 2>/dev/null || echo 1)
+mkdir -p "$out"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
 
-swift build -c release --product AVRelay ${archs[@]+"${archs[@]}"}
-bin=$(swift build -c release --product AVRelay ${archs[@]+"${archs[@]}"} --show-bin-path)
+# One architecture per build, then lipo: building both at once switches some
+# Xcode versions to a build system that loses libsodium's prebuilt library.
+if [[ -z $archs ]]; then
+	swift build -c release --product AVRelay
+	bin=$(swift build -c release --product AVRelay --show-bin-path)
+	cp "$bin/AVRelay" "$work/AVRelay"
+else
+	slices=()
+	for arch in $archs; do
+		swift build -c release --product AVRelay --arch "$arch"
+		bin=$(swift build -c release --product AVRelay --arch "$arch" --show-bin-path)
+		cp "$bin/AVRelay" "$work/AVRelay-$arch"
+		slices+=("$work/AVRelay-$arch")
+	done
+	lipo -create -output "$work/AVRelay" "${slices[@]}"
+fi
+# WebRTC.framework comes prebuilt for both architectures.
+lipo -info "$work/AVRelay"
 
 app="$out/AV Relay.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resources"
-cp "$bin/AVRelay" "$app/Contents/MacOS/AVRelay"
+cp "$work/AVRelay" "$app/Contents/MacOS/AVRelay"
 ditto "$bin/WebRTC.framework" "$app/Contents/Frameworks/WebRTC.framework"
 sed -e "s/@VERSION@/$version/g" -e "s/@BUILD@/$build/g" App/Info.plist >"$app/Contents/Info.plist"
 # The logo (assets/logo/generate.py): the app icon and the menu bar's template images.
@@ -46,7 +65,7 @@ cp "$icons"/macos-menubar/menubar-{off,on,live}{,@2x}.png "$app/Contents/Resourc
 # Load frameworks from the bundle, and keep no paths of the build machine.
 exe="$app/Contents/MacOS/AVRelay"
 install_name_tool -add_rpath @executable_path/../Frameworks "$exe"
-otool -l "$exe" | awk '/cmd LC_RPATH/ { getline; getline; print $2 }' | while read -r path; do
+otool -l "$exe" | awk '/cmd LC_RPATH/ { getline; getline; print $2 }' | sort -u | while read -r path; do
 	case $path in
 	@* | /usr/lib/*) ;;
 	*) install_name_tool -delete_rpath "$path" "$exe" ;;
