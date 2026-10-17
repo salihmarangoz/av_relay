@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>AVRelay</string>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.salihmarangoz.avrelay</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>AV Relay</string>
+	<key>CFBundleDisplayName</key>
+	<string>AV Relay</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@BUILD@</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<key>NSCameraUsageDescription</key>
+	<string>AV Relay sends the camera's picture to your paired computer, only while an app on it is using the camera.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>AV Relay sends the microphone's sound to your paired computer, only while an app on it is using the microphone.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>AV Relay talks to your paired computer on the local network: to pair, and to send the camera and microphone.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_avrelay._tcp</string>
+	</array>
+	<key>NSHumanReadableCopyright</key>
+	<string>GPL-3.0-or-later</string>
+</dict>
+</plist>
