@@ -33,6 +33,7 @@ pub enum UiEvent {
     SetVideo(VideoFormat),
     SetAutostart(bool),
     SetKeepDevices(bool),
+    SetEnabled(bool),
     /// The desktop's tray host appeared or went away.
     TrayAvailable(bool),
     Quit,
@@ -83,6 +84,7 @@ pub fn run() -> Result<()> {
         problems: core.problems().to_vec(),
         autostart: autostart::is_enabled(),
         keep_devices: settings.keep_devices,
+        enabled: settings.enabled,
         video: settings.video,
         events: ui_tx.clone(),
     };
@@ -185,6 +187,22 @@ pub fn run() -> Result<()> {
                             async move { tray.update(|t| t.keep_devices = on).await }
                         });
                     }
+                    UiEvent::SetEnabled(on) => {
+                        let store = ui.core.store();
+                        let mut s = store.settings().unwrap_or_default();
+                        if s.enabled != on {
+                            s.enabled = on;
+                            if let Err(e) = store.save_settings(&s) {
+                                log::error!("saving settings: {e:#}");
+                            }
+                            log::info!("AV Relay switched {}", if on { "on" } else { "off" });
+                            let _ = ui.commands.send(Command::EnabledChanged);
+                        }
+                        ui.rt.spawn({
+                            let tray = tray.clone();
+                            async move { tray.update(|t| t.enabled = on).await }
+                        });
+                    }
                     UiEvent::SetAutostart(on) => {
                         if let Err(e) = autostart::set(on) {
                             log::error!("start at login: {e:#}");
@@ -231,7 +249,7 @@ pub fn run() -> Result<()> {
 
 fn confirm_forget(ui: &Rc<Ui>) {
     let mac = match &*ui.status.borrow() {
-        Status::Searching { mac, .. } | Status::Connected { mac, .. } => mac.clone(),
+        Status::Searching { mac, .. } | Status::Connected { mac, .. } | Status::Disabled { mac: Some(mac) } => mac.clone(),
         _ => return,
     };
     let dialog = adw::AlertDialog::builder()

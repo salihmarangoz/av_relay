@@ -75,6 +75,15 @@ A level meter can count as using the microphone: while **Settings → Sound**
 shows the input level of **MacBook Microphone**, the Mac's microphone may be
 on.
 
+## Switching it off
+
+**Enable AV Relay**, at the top of the menu (and in the AV Relay window),
+switches AV Relay off without quitting it: no connection to the Mac, no
+virtual camera or microphone (even with **Keep virtual devices on**), and
+your previous default input back, as if it were closed. The icon shows the
+lens struck through. It stays off after a restart until you switch it on
+again.
+
 ## Start at login
 
 The package starts AV Relay at every login, for every user. To turn that off

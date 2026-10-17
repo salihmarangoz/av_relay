@@ -29,11 +29,14 @@ pub struct Settings {
     /// Keep the virtual camera and microphone (and the default input) while
     /// the Mac is away, instead of removing them after the grace period.
     pub keep_devices: bool,
+    /// "Enable AV Relay". Off is as if the app were closed (no connection,
+    /// no devices), with the tray icon left to switch it back on.
+    pub enabled: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { video: VideoFormat { width: 1920, height: 1080, fps: 30 }, autostart_offered: false, keep_devices: false }
+        Self { video: VideoFormat { width: 1920, height: 1080, fps: 30 }, autostart_offered: false, keep_devices: false, enabled: true }
     }
 }
 
@@ -227,7 +230,7 @@ mod tests {
     fn settings_default_and_round_trip() {
         let store = temp_store();
         assert_eq!(store.settings().unwrap().video, VideoFormat { width: 1920, height: 1080, fps: 30 });
-        let s = Settings { video: VideoFormat { width: 1280, height: 720, fps: 30 }, autostart_offered: true, keep_devices: true };
+        let s = Settings { video: VideoFormat { width: 1280, height: 720, fps: 30 }, autostart_offered: true, keep_devices: true, enabled: false };
         store.save_settings(&s).unwrap();
         assert_eq!(store.settings().unwrap(), s);
         fs::remove_dir_all(store.dir()).unwrap();

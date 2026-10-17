@@ -39,7 +39,8 @@ fn build(ui: &Rc<Ui>) -> adw::Window {
 
     let mac_group = adw::PreferencesGroup::new();
     let mac_row = adw::ActionRow::builder().title("AV Relay").build();
-    mac_row.add_prefix(&gtk::Image::from_icon_name(&format!("{}-on-symbolic", super::APP_ID)));
+    let state_icon = gtk::Image::from_icon_name(&format!("{}-on-symbolic", super::APP_ID));
+    mac_row.add_prefix(&state_icon);
     mac_group.add(&mac_row);
     let camera_row = adw::ActionRow::builder().title("MacBook Camera").build();
     let mic_row = adw::ActionRow::builder().title("MacBook Microphone").build();
@@ -59,6 +60,18 @@ fn build(ui: &Rc<Ui>) -> adw::Window {
     }
 
     let settings = adw::PreferencesGroup::builder().title("Settings").build();
+    let enable = adw::SwitchRow::builder()
+        .title("Enable AV Relay")
+        .subtitle("Off is as if AV Relay were closed: no connection, no virtual camera or microphone")
+        .active(ui.core.store().settings().unwrap_or_default().enabled)
+        .build();
+    enable.connect_active_notify({
+        let events = ui.events.clone();
+        move |row| {
+            let _ = events.try_send(UiEvent::SetEnabled(row.is_active()));
+        }
+    });
+    settings.add(&enable);
     let quality = adw::ComboRow::builder()
         .title("Camera quality")
         .model(&gtk::StringList::new(&["1080p, 30 fps", "720p, 30 fps"]))
@@ -125,7 +138,8 @@ fn build(ui: &Rc<Ui>) -> adw::Window {
         .build();
 
     let render = {
-        let (mac_row, camera_row, mic_row, pair, forget) = (mac_row.clone(), camera_row.clone(), mic_row.clone(), pair.clone(), forget.clone());
+        let (mac_row, camera_row, mic_row, pair, forget, enable, state_icon) =
+            (mac_row.clone(), camera_row.clone(), mic_row.clone(), pair.clone(), forget.clone(), enable.clone(), state_icon.clone());
         move |status: &Status| {
             let (title, subtitle) = match status {
                 Status::Starting => ("Starting…".to_string(), String::new()),
@@ -138,7 +152,25 @@ fn build(ui: &Rc<Ui>) -> adw::Window {
                     [super::tray::hold_line(*devices), last_error.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · "),
                 ),
                 Status::Connected { mac, .. } => (format!("Connected to {mac}"), String::new()),
+                Status::Disabled { mac } => (
+                    "AV Relay is off".to_string(),
+                    match mac {
+                        Some(mac) => format!("Switch it on to use {mac}'s camera and microphone."),
+                        None => "No virtual camera or microphone.".to_string(),
+                    },
+                ),
             };
+            let state = match status {
+                Status::Disabled { .. } => "disabled",
+                Status::Connected { camera, mic, .. } if camera.used_here || mic.used_here => "live",
+                Status::Connected { .. } => "on",
+                _ => "off",
+            };
+            state_icon.set_icon_name(Some(&format!("{}-{state}-symbolic", super::APP_ID)));
+            // Follows the tray's switch too (setting it to its value again is a no-op).
+            if !matches!(status, Status::Starting) {
+                enable.set_active(!matches!(status, Status::Disabled { .. }));
+            }
             mac_row.set_title(&glib::markup_escape_text(&title));
             mac_row.set_subtitle(&glib::markup_escape_text(&subtitle));
             let connected = matches!(status, Status::Connected { .. });
@@ -148,7 +180,7 @@ fn build(ui: &Rc<Ui>) -> adw::Window {
                 camera_row.set_subtitle(&glib::markup_escape_text(&device_subtitle(camera)));
                 mic_row.set_subtitle(&glib::markup_escape_text(&device_subtitle(mic)));
             }
-            let paired = !matches!(status, Status::NotPaired { .. } | Status::Starting);
+            let paired = !matches!(status, Status::NotPaired { .. } | Status::Starting | Status::Disabled { mac: None });
             pair.set_title(if paired { "Pair with another Mac…" } else { "Pair with a Mac…" });
             forget.set_visible(paired);
         }
