@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 description = "Use another computer's camera and microphone on Ubuntu as a virtual webcam and mic"
-repository = "https://github.com/salihmarangoz/av_relay_mac_to_linux"
+repository = "https://github.com/salihmarangoz/av_relay"
 publish = false
 
 [dependencies]

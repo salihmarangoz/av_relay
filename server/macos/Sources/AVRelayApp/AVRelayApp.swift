@@ -63,6 +63,9 @@ struct MenuContent: View {
         if let mediaLine = model.mediaLine {
             Text(mediaLine)
         }
+        if AppModel.syncTest {
+            Text("Test source: a white frame and a beep every 2 s")
+        }
         Divider()
         Button("Allow Pairing…") {
             model.openPairing()

@@ -168,8 +168,8 @@ you delete it.
 ## Building from source
 
 ```
-git clone https://github.com/salihmarangoz/av_relay_mac_to_linux
-cd av_relay_mac_to_linux/client/linux
+git clone https://github.com/salihmarangoz/av_relay
+cd av_relay/client/linux
 scripts/setup-dev.sh        # build dependencies, udev rule, v4l2loopback
 cargo run --release         # the app (tray); `cargo run -- run` is headless
 cargo test
