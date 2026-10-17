@@ -1,6 +1,6 @@
 # On a version tag (v1.2.3, made by scripts/release.py): check that the
-# tree says that version everywhere, build both apps, and publish them as a
-# GitHub Release, the Mac .zip and .dmg and the Linux .deb, with the
+# tree says that version everywhere, build all three apps, and publish them as a
+# GitHub Release, the Mac .zip/.dmg, Linux .deb and Windows installer, with the
 # changelog's section as the notes. A version with a "-" (1.2.3-rc.1) is a
 # pre-release. See docs/releasing.md.
 name: Release
@@ -63,7 +63,7 @@ jobs:
 
   publish:
     name: Publish the release
-    needs: [macos, linux]
+    needs: [macos, linux, windows]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -82,3 +82,10 @@ jobs:
           [[ $GITHUB_REF_NAME == *-* ]] && prerelease=(--prerelease)
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "AV Relay ${GITHUB_REF_NAME#v}" --notes-file notes.md "${prerelease[@]}"
+
+  windows:
+    name: Windows installer
+    needs: check
+    uses: ./.github/workflows/windows-build.yml
+    with:
+      artifact-name: release-windows

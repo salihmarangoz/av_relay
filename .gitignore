@@ -8,3 +8,9 @@ server/macos/build/
 xcuserdata/
 # Linux build output
 client/linux/target/
+# Local Windows tools and build output
+.tools/
+.tmp/
+client/windows/target/
+client/windows/dist/
+client/windows/*.lnk

@@ -10,6 +10,25 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Initial Windows receiver in Rust with native settings and tray controls,
+  code pairing, automatic reconnect and the Ubuntu receiver's shared
+  protocol and GStreamer media implementation. Video uses an installed
+  OBS Virtual Camera; microphone audio uses a separately installed virtual
+  cable. Windows identity keys are protected by DPAPI.
+- Windows installer with bundled GStreamer and Visual C++ runtime, Start menu
+  and optional desktop shortcuts, optional start at login, and an uninstaller.
+  GitHub Actions tests and publishes the installer and SHA-256 checksum.
+- Windows settings and pairing pages follow the Ubuntu client, with the same
+  app logo, four tray states, theme-aware tray icons, and 720p/1080p presets.
+
+### Fixed
+
+- Windows: sender camera capture now follows actual OBS Virtual Camera readers.
+  Ending camera use can stop the sender camera while microphone capture continues.
+  The microphone switch remains manual in this initial release.
+
 ## [0.2.1] - 2026-10-17
 
 ### Fixed

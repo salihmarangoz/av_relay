@@ -9,8 +9,8 @@
     scripts/release.py --notes 0.2.0    # CI: the release notes (the changelog's section)
 
 Preparing moves CHANGELOG.md's "Unreleased" entries under the new version,
-sets the version in the Linux package (Cargo.toml, Cargo.lock, the AppStream
-metainfo), commits, and makes the annotated tag. The Mac app takes its
+sets the version in both receivers' Cargo.toml/Cargo.lock and the Linux
+AppStream metainfo, commits, and makes the annotated tag. The Mac app takes its
 version from the tag when it's built. Pushing the tag starts the release.
 Versions follow Semantic Versioning; one with a "-" (0.2.0-rc.1) is
 published as a pre-release. Details: docs/releasing.md.
@@ -28,6 +28,8 @@ REPO_URL = "https://github.com/salihmarangoz/av_relay"
 CHANGELOG = ROOT / "CHANGELOG.md"
 CARGO = ROOT / "client/linux/Cargo.toml"
 LOCK = ROOT / "client/linux/Cargo.lock"
+WINDOWS_CARGO = ROOT / "client/windows/Cargo.toml"
+WINDOWS_LOCK = ROOT / "client/windows/Cargo.lock"
 METAINFO = ROOT / "client/linux/packaging/io.github.salihmarangoz.avrelay.metainfo.xml"
 VERSION = re.compile(r"^\d+\.\d+\.\d+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$")
 SECTION = re.compile(r"^## \[([^\]]+)\](?: - (\d{4}-\d{2}-\d{2}))?[ \t]*$", re.M)
@@ -86,6 +88,11 @@ def problems(version):
         found.append(f"client/linux/Cargo.lock says {lock_version()} for av-relay")
     if metainfo_version() != version:
         found.append(f"the metainfo's newest release is {metainfo_version()}")
+    for path, pattern in [(WINDOWS_CARGO, r'^version = "([^"]+)"'),
+                          (WINDOWS_LOCK, r'^\[\[package\]\]\nname = "av-relay-windows"\nversion = "([^"]+)"')]:
+        match = re.search(pattern, path.read_text(encoding="utf-8"), re.M)
+        if not match or match.group(1) != version:
+            found.append(f"{path.relative_to(ROOT)} has a different version")
     entries = notes(version)
     if entries is None:
         found.append(f"CHANGELOG.md has no section for {version}")
@@ -126,6 +133,12 @@ def set_cargo(version):
     if n != 1:
         fail("no av-relay package in client/linux/Cargo.lock")
     LOCK.write_text(text)
+    for path, pattern in [(WINDOWS_CARGO, r'^(version = )"[^"]+"'),
+                          (WINDOWS_LOCK, r'^(\[\[package\]\]\nname = "av-relay-windows"\nversion = )"[^"]+"')]:
+        text, n = re.subn(pattern, rf'\1"{version}"', path.read_text(encoding="utf-8"), count=1, flags=re.M)
+        if n != 1:
+            fail(f"no Windows package version in {path.relative_to(ROOT)}")
+        path.write_text(text, encoding="utf-8")
 
 
 def set_metainfo(version, date):
@@ -160,7 +173,7 @@ def prepare(version, date, tag):
     left = problems(version)
     if left:
         fail("after the update: " + "; ".join(left))
-    git("add", str(CHANGELOG), str(CARGO), str(LOCK), str(METAINFO))
+    git("add", str(CHANGELOG), str(CARGO), str(LOCK), str(METAINFO), str(WINDOWS_CARGO), str(WINDOWS_LOCK))
     git("commit", "-m", f"Release {version}")
     if tag:
         git("tag", "-a", f"v{version}", "-m", f"AV Relay {version}\n\n{notes(version)}")

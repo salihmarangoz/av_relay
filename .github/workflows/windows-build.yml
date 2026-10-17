@@ -1,0 +1,65 @@
+name: Build Windows installer
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        type: string
+        default: windows-installer
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: client/windows
+      - name: Install GStreamer development package
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'gstreamer-setup.exe'
+          Invoke-WebRequest 'https://gstreamer.freedesktop.org/data/pkg/windows/1.28.8/msvc/gstreamer-1.0-msvc-x86_64-1.28.8.exe' -OutFile $installer
+          if ((Get-AuthenticodeSignature $installer).Status -ne 'Valid') { throw 'Invalid GStreamer signature' }
+          $root = Join-Path $env:RUNNER_TEMP 'gstreamer'
+          $process = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER','/TYPE=devel',"/DIR=$root") -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "GStreamer install failed: $($process.ExitCode)" }
+          "AVRELAY_GST_ROOT=$root" >> $env:GITHUB_ENV
+      - name: Install Inno Setup compiler
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'inno-setup.exe'
+          Invoke-WebRequest 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe' -OutFile $installer
+          if ((Get-AuthenticodeSignature $installer).Status -ne 'Valid') { throw 'Invalid Inno Setup signature' }
+          $root = Join-Path $env:RUNNER_TEMP 'inno'
+          $process = Start-Process $installer -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER','/NOICONS',"/DIR=$root") -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Inno Setup install failed: $($process.ExitCode)" }
+          "AVRELAY_ISCC=$root/ISCC.exe" >> $env:GITHUB_ENV
+      - name: Test, build, and package
+        shell: pwsh
+        run: |
+          . ./client/windows/scripts/env.ps1 -GStreamerRoot $env:AVRELAY_GST_ROOT
+          cargo test --locked --manifest-path client/windows/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
+          ./client/windows/scripts/package.ps1 -GStreamerRoot $env:AVRELAY_GST_ROOT -Iscc $env:AVRELAY_ISCC
+      - name: Verify unattended install and uninstall
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem client/windows/dist/*-Setup.exe).FullName
+          $dest = Join-Path $env:RUNNER_TEMP 'installed-av-relay'
+          $process = Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$dest") -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw 'Install failed' }
+          $env:PATH = "$env:SystemRoot/System32;$env:SystemRoot"
+          $process = Start-Process "$dest/bin/av-relay-windows.exe" -ArgumentList '--doctor' -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw 'Installed runtime failed' }
+          $process = Start-Process "$dest/unins000.exe" -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0 -or (Test-Path "$dest/bin/av-relay-windows.exe")) { throw 'Uninstall failed' }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: |
+            client/windows/dist/*-Setup.exe
+            client/windows/dist/*-Setup.exe.sha256
+          if-no-files-found: error
+          retention-days: 7

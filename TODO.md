@@ -62,5 +62,7 @@ instead of concealed.
   cameras only through PipeWire's camera portal (some Flatpaks, GNOME
   Snapshot) don't see it. Firefox and Chrome use V4L2 and work. Fix: a
   PipeWire `Video/Source` node fed the same frames.
-- **Windows receiver**: notes only, in
-  [client/windows/README.md](client/windows/README.md).
+- **Windows receiver**: initial Rust implementation in
+  [client/windows](client/windows), with an installer and camera use detection.
+  Add automatic microphone use detection and a native Media Foundation camera
+  provider; verify sustained calls against the sender.

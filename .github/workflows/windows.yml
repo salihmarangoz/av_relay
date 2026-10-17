@@ -1,0 +1,13 @@
+name: Windows
+on:
+  push:
+    branches: [main]
+    paths: ["client/windows/**", "client/linux/src/crypto/**", "client/linux/src/proto/**", "client/linux/src/media/**", "client/linux/src/app/discovery.rs", "tests/vectors/**", "assets/**", ".github/workflows/windows*.yml"]
+  pull_request:
+    paths: ["client/windows/**", "client/linux/src/crypto/**", "client/linux/src/proto/**", "client/linux/src/media/**", "client/linux/src/app/discovery.rs", "tests/vectors/**", "assets/**", ".github/workflows/windows*.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    uses: ./.github/workflows/windows-build.yml

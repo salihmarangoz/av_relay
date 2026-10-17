@@ -2,7 +2,7 @@
 
 The sender and the receiver are released together, with one version number,
 from `main`. Pushing a version tag makes the release: GitHub Actions builds
-both apps and publishes them with the changelog's notes.
+the sender and both receivers and publishes them with the changelog's notes.
 
 ## Versions
 
@@ -16,8 +16,8 @@ both apps and publishes them with the changelog's notes.
   a MINOR step may do that too; the changelog then says so.
 - **Pre-release**: `0.2.0-rc.1`, published as a pre-release on GitHub.
 
-The version lives in the Linux package (`client/linux/Cargo.toml`,
-`Cargo.lock`, the AppStream metainfo); the Mac app gets it from the tag when
+The version lives in both receivers' `Cargo.toml` and `Cargo.lock` files and
+the Linux AppStream metainfo; the Mac app gets it from the tag when
 it's built. `scripts/release.py` sets all of them, so don't edit them by hand.
 
 ## While working
@@ -37,7 +37,7 @@ Write for users: what they see or can do now, not how the code changed.
    ```
 
    It moves the Unreleased entries under `## [0.2.0] - <today>`, sets the
-   version in the Linux package, commits "Release 0.2.0" and makes the
+   version in both receiver packages, commits "Release 0.2.0" and makes the
    annotated tag `v0.2.0`. Nothing leaves your computer yet.
 
 2. Look at the commit (`git show`), then publish:
@@ -48,7 +48,8 @@ Write for users: what they see or can do now, not how the code changed.
 
 3. The **Release** workflow (`.github/workflows/release.yml`) checks that the
    tag, the package version and the changelog agree, runs the tests, builds
-   the Mac `.zip` and `.dmg` and the Linux `.deb`, and creates the GitHub
+   the Mac `.zip` and `.dmg`, Linux `.deb`, Windows x64 installer and checksum,
+   and creates the GitHub
    Release with the changelog's section as its notes. Follow it under
    **Actions**; it takes about 15 minutes.
 
@@ -71,3 +72,8 @@ Releases are signed ad hoc (no Apple Developer ID): no keys or secrets are
 needed in CI. Users confirm the first launch once in System Settings, and
 macOS asks for camera and microphone permission again after each update; see
 [docs/macos.md](macos.md).
+
+The Windows installer is unsigned. Windows CI bundles the required GStreamer
+runtime DLLs and plugins, the MSVC runtime, and license notices. OBS and VB-CABLE
+drivers are installed separately. CI tests installation and uninstallation
+before uploading the installer; a failed platform build prevents publication.

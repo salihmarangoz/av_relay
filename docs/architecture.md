@@ -12,7 +12,7 @@ senders and receivers can follow.
 ```
 server/macos/        the sender for macOS (Swift, menu bar)
 client/linux/        the receiver for Linux (Rust, tray), packaged as .deb
-client/windows/      notes only, no code yet (README.md)
+client/windows/      Windows receiver (Rust, Win32 tray, OBS camera, WASAPI cable)
 docs/                protocol.md (source of truth), architecture.md, user docs
 tests/vectors/       shared crypto test vectors + their generator
 assets/              logo script and the icons it generates
@@ -20,6 +20,14 @@ assets/              logo script and the icons it generates
 ```
 
 ## The whole picture
+
+The Windows receiver compiles the Linux receiver's crypto, protocol,
+discovery and GStreamer media modules from their existing source paths.
+It replaces GTK/PipeWire/V4L2 with Win32 controls, DPAPI-protected identity
+storage, an OBS-compatible shared-memory camera producer and WASAPI
+playback into a separately installed virtual cable. Its initial demand
+camera capture follows OBS reader use and microphone capture is manual;
+see `client/windows/README.md` for setup and limitations.
 
 ```
 ┌────────── sender (server): macOS app ─────────────────┐        ┌────────── receiver (client): Linux app ─────────┐
@@ -185,12 +193,12 @@ sequenceDiagram
 
 ## Building and releasing
 
-GitHub Actions tests and builds both apps when their code changes on main or
+GitHub Actions tests and builds the apps when their code changes on main or
 in a pull request (the macOS one also on demand, as macOS runner minutes
 are costly). Both are released together with one version:
 `scripts/release.py X.Y.Z` moves the changelog's entries under the version,
-sets it in the Linux package and tags `vX.Y.Z`; pushing the tag checks that
-they agree, builds both, and publishes a GitHub Release with the changelog's
+sets it in both receiver packages and tags `vX.Y.Z`; pushing the tag checks that
+they agree, builds all three apps, and publishes a GitHub Release with the changelog's
 section as its notes (docs/releasing.md):
 
 - **macOS sender** (macOS runner): test, build the app for Apple silicon and
@@ -200,16 +208,20 @@ section as its notes (docs/releasing.md):
   v4l2loopback 0.13+; Ubuntu 24.04's own `v4l2loopback-dkms` is 0.12.7, which
   is too old, so the package and the app check the version and say what to
   install).
-- Both run their unit tests, including the `tests/vectors` checks, before
+- **Windows receiver** (`windows-2025` runner): test the shared Rust modules,
+  build a per-user Inno Setup installer with GStreamer and MSVC runtime,
+  smoke-test installation/uninstallation, publish the installer and checksum.
+- All run their unit tests, including the `tests/vectors` checks, before
   packaging.
 
 ## Tested on
 
 Ubuntu 24.04 and a MacBook Air (M4) with macOS 27, over Wi-Fi.
 
-## Windows (not started)
+## Windows
 
-`client/windows/README.md` holds the notes for a Windows receiver: a virtual
-camera through Windows 11's `MFCreateVirtualCamera` (user mode, free), and
-microphone options that don't need a paid driver signature. Nothing is
-implemented; the protocol is ready for it.
+The Rust receiver compiles the Linux crypto, protocol, discovery and media
+modules directly. Native Win32 supplies the settings pages and tray, DPAPI
+protects the identity, an OBS shared-memory queue supplies camera video, and
+WASAPI sends audio to VB-CABLE. Camera capture follows OBS reader handles;
+microphone capture uses a manual switch. See `client/windows/README.md`.

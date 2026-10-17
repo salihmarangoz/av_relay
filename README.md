@@ -10,7 +10,8 @@ AV Relay has two sides. The **sender** shares its camera and microphone. The
 **receiver** shows them as an ordinary webcam and microphone, **AV Relay
 Camera** and **AV Relay Microphone**, so every app can use them: Firefox,
 Chrome, Discord, Zoom, OBS, … Today the sender runs on a Mac and the receiver
-on Ubuntu, on the same network.
+on Ubuntu or Windows, on the same network. The initial Windows receiver
+uses OBS Virtual Camera and VB-CABLE, with a manual microphone switch.
 
 - **On demand.** The sender's camera and microphone run only while an app on
   the receiver uses them. Close the call and the camera light goes out.
@@ -32,7 +33,7 @@ to use, and the **receiver** on the computer where you want them.
 |---|---|---|
 | **macOS** 14 or newer | [Install the sender](#sender-on-macos) | Not yet |
 | **Ubuntu** 24.04 | Not yet | [Install the receiver](#receiver-on-ubuntu) |
-| **Windows** | Not yet | Not yet ([notes](client/windows/README.md)) |
+| **Windows** 10/11 x64 | Not yet | [Install the receiver](client/windows/README.md) |
 
 Download from the [latest release](../../releases/latest). Then
 [pair the two](#pair).
@@ -78,6 +79,11 @@ recent Linux desktops with PipeWire may work too, but aren't tested.
 More, including troubleshooting: [docs/linux.md](docs/linux.md).
 
 ## Pair
+
+Windows setup and pairing: [Windows receiver guide](client/windows/README.md).
+It uses **OBS Virtual Camera** and **VB-CABLE**. Camera capture follows app
+usage; microphone capture uses a manual switch. The pairing steps below
+describe the Ubuntu receiver.
 
 1. **On the sender:** click the AV Relay icon in the menu bar → **Allow
    Pairing…**. It shows a 6-digit code, its address and its port.
@@ -139,6 +145,7 @@ receiver, over Wi-Fi.
 - Sender for macOS: [server/macos](server/macos) (Swift)
 - Receiver for Linux: [client/linux](client/linux) (Rust) and
   [docs/linux.md](docs/linux.md#building-from-source)
+- Receiver for Windows: [client/windows](client/windows) (Rust, native Win32 UI)
 - Both follow [docs/protocol.md](docs/protocol.md) and test against the shared
   vectors in [tests/vectors](tests/vectors).
 - What changed in each release: [CHANGELOG.md](CHANGELOG.md); how a release

@@ -298,6 +298,18 @@ def icns(pngs):
     return b"icns" + struct.pack(">I", 8 + len(body)) + body
 
 
+def ico(pngs):
+    """Windows multi-resolution icon, with PNG payloads (Vista and newer)."""
+    offset = 6 + 16 * len(pngs)
+    directory, body = b"", b""
+    for size, data in sorted(pngs.items()):
+        directory += struct.pack("<BBBBHHII", size if size < 256 else 0,
+                                 size if size < 256 else 0, 0, 0, 1, 32, len(data), offset)
+        body += data
+        offset += len(data)
+    return struct.pack("<HHH", 0, 1, len(pngs)) + directory + body
+
+
 # ---------- output -------------------------------------------------------------
 
 
@@ -309,6 +321,13 @@ def build():
     pngs = {n: png_bytes(render_app_icon(n)) for n in sizes}
     for n in sizes:
         files[f"app-icon-{n}.png"] = pngs[n]
+
+    files["windows/app.ico"] = ico({n: pngs[n] for n in (16, 32, 48, 64, 128, 256)})
+    for state in GLYPH_STATES:
+        for theme, colour in (("light", (32, 32, 32)), ("dark", (255, 255, 255))):
+            files[f"windows/tray-{state}-{theme}.ico"] = ico({
+                n: png_bytes(render_glyph(state, n, colour)) for n in (16, 20, 24, 32, 40, 48)
+            })
 
     # macOS: iconset (iconutil input) and a ready .icns, with Apple's margin.
     mac = {n: png_bytes(render_mac_icon(n)) for n in sizes}
@@ -369,11 +388,19 @@ def same(path, new, old):
     inside the .icns) by their pixels: zlib's output differs by platform."""
     if new == old:
         return True
+    if path.endswith(".svg") or path.endswith("index.theme"):
+        return new.replace(b"\r\n", b"\n") == old.replace(b"\r\n", b"\n")
     if path.endswith(".png"):
         return pixels(new) == pixels(old)
     if path.endswith(".icns"):
         a, b = icns_entries(new), icns_entries(old)
         return len(a) == len(b) and all(ka == kb and pixels(da) == pixels(db) for (ka, da), (kb, db) in zip(a, b))
+    if path.endswith(".ico"):
+        def entries(data):
+            count = struct.unpack_from("<H", data, 4)[0]
+            return [pixels(data[offset:offset+length]) for i in range(count)
+                    for length, offset in [struct.unpack_from("<II", data, 6 + i*16 + 8)]]
+        return entries(new) == entries(old)
     return False
 
 

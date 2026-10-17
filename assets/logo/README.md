@@ -19,8 +19,9 @@ What it writes to `assets/generated/`:
 | `AppIcon.icns`, `AppIcon.iconset/` | the Mac app bundle |
 | `macos-menubar/menubar-{off,on,live,disabled}[@2x].png` (+ `.svg`) | the Mac menu bar (template images) |
 | `linux/hicolor/...` | the Linux package: the app icon, and the tray icons in four states (`-symbolic.svg`, plus white PNGs for trays that don't recolour symbolic icons) |
+| `windows/app.ico`, `windows/tray-{off,on,live,disabled}-{light,dark}.ico` | the Windows executable, installer, shortcuts, and theme-aware system tray |
 
-The four states, the same on both systems:
+The four states, the same on all three systems:
 
 - **off**: just the lens (not connected)
 - **on**: lens and arcs (connected)
