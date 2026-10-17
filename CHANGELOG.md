@@ -31,8 +31,11 @@ The first release.
   each other on their own (Bonjour).
 - **Media over WebRTC** on the local network: H.264 video (hardware-encoded
   on the Mac, up to 1080p at 30 fps) and Opus audio, with congestion
-  control, retransmission and keyframe requests. Over Wi-Fi the receiver
-  keeps a buffer that grows when the network stalls, so sound stays smooth.
+  control, retransmission and keyframe requests. The receiver plays sound
+  and picture with one delay, set from the network's measured delay over
+  the last minute (0.2 s on a calm network, up to 2 s on a stalling Wi-Fi)
+  and remembered for the next call, so both stay smooth and in sync (audio
+  within ~30 ms of the picture).
 - **Security**: the control channel is Noise IK with the keys from pairing
   (CPace, then Noise XXpsk3); media is DTLS-SRTP, authenticated through it.
   No account, no cloud.
