@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AV Relay device test</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f6f6f6; --fg: #1d1d1f; --muted: #6b6b70; --card: #ffffff; --accent: #1a73c8; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1b1d22; --fg: #ececf0; --muted: #a0a0a8; --card: #262931; --accent: #4fa3ff; } }
+  body { margin: 0; padding: 24px 16px; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p { color: var(--muted); margin: 0 0 16px; }
+  .card { background: var(--card); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  label { display: block; font-weight: 600; margin-bottom: 6px; }
+  select, button { font: inherit; padding: 6px 10px; border-radius: 8px; }
+  button { background: var(--accent); color: white; border: 0; cursor: pointer; }
+  video { width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 8px; margin-top: 12px; }
+  .meter { height: 14px; background: color-mix(in srgb, var(--muted) 25%, transparent); border-radius: 7px; overflow: hidden; margin-top: 12px; }
+  .meter div { height: 100%; width: 0; background: var(--accent); transition: width 60ms linear; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .info { color: var(--muted); font-size: 13px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>AV Relay device test</h1>
+  <p>Opens a camera and a microphone the way a video call does. Pick
+  “MacBook Camera” and “MacBook Microphone”: the Mac's camera light and
+  microphone indicator should come on, and go off about 3 seconds after you
+  press Stop.</p>
+
+  <div class="card">
+    <div class="row">
+      <button id="start">Start</button>
+      <button id="stop">Stop</button>
+    </div>
+    <p class="info" id="hint">The browser asks for permission first; then the lists below fill in.</p>
+  </div>
+
+  <div class="card">
+    <label for="cam">Camera</label>
+    <select id="cam"></select>
+    <video id="video" autoplay playsinline muted></video>
+    <div class="info" id="camInfo"></div>
+  </div>
+
+  <div class="card">
+    <label for="mic">Microphone</label>
+    <select id="mic"></select>
+    <div class="meter"><div id="level"></div></div>
+    <div class="info" id="micInfo"></div>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let stream = null, audioCtx = null, raf = 0, labelsKnown = false;
+
+async function listDevices() {
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  // Before the first permission grant, browsers hide labels and IDs.
+  labelsKnown = devices.some(d => d.label);
+  for (const [sel, kind, prefer] of [[$('cam'), 'videoinput', 'MacBook Camera'], [$('mic'), 'audioinput', 'MacBook Microphone']]) {
+    const current = sel.value;
+    sel.innerHTML = '';
+    for (const d of devices.filter(d => d.kind === kind)) {
+      const o = document.createElement('option');
+      o.value = d.deviceId; o.textContent = d.label || '(unnamed)';
+      sel.appendChild(o);
+    }
+    const match = [...sel.options].find(o => o.value === current) || [...sel.options].find(o => o.textContent.includes(prefer));
+    if (match) sel.value = match.value;
+  }
+}
+
+function stop() {
+  cancelAnimationFrame(raf);
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = null;
+  if (audioCtx) audioCtx.close();
+  audioCtx = null;
+  $('video').srcObject = null;
+  $('level').style.width = '0';
+  $('camInfo').textContent = $('micInfo').textContent = 'Stopped.';
+}
+
+async function start() {
+  stop();
+  try {
+    if (!labelsKnown) {
+      // First run: ask once so the device labels become visible.
+      (await navigator.mediaDevices.getUserMedia({ video: true, audio: true })).getTracks().forEach(t => t.stop());
+      await listDevices();
+    }
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { deviceId: { exact: $('cam').value }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: { deviceId: { exact: $('mic').value }, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    });
+    $('video').srcObject = stream;
+    const v = stream.getVideoTracks()[0], a = stream.getAudioTracks()[0];
+    const s = v.getSettings();
+    $('camInfo').textContent = `${v.label}: ${s.width}×${s.height} at ${Math.round(s.frameRate || 0)} fps`;
+    $('micInfo').textContent = `${a.label}`;
+    audioCtx = new AudioContext();
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 1024;
+    audioCtx.createMediaStreamSource(stream).connect(analyser);
+    const buf = new Float32Array(analyser.fftSize);
+    const tick = () => {
+      analyser.getFloatTimeDomainData(buf);
+      const rms = Math.sqrt(buf.reduce((s, x) => s + x * x, 0) / buf.length);
+      $('level').style.width = Math.min(100, rms * 400) + '%';
+      raf = requestAnimationFrame(tick);
+    };
+    tick();
+    $('hint').textContent = 'Running. Speak to see the level move.';
+  } catch (e) {
+    $('hint').textContent = `Couldn't start: ${e.name}: ${e.message}`;
+  }
+}
+
+$('start').onclick = start;
+$('stop').onclick = stop;
+$('cam').onchange = $('mic').onchange = () => { if (stream) start(); };
+navigator.mediaDevices.addEventListener('devicechange', listDevices);
+listDevices().then(() => { if (location.hash === '#start') start(); });
+</script>
+</body>
+</html>

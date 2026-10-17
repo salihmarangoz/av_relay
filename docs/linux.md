@@ -114,6 +114,12 @@ prompt (System Settings → Privacy & Security → Camera).
 **The Mac's address changed.** Nothing to do: the Mac announces itself on
 the network (Bonjour), and AV Relay finds it again.
 
+**Test the devices** without a call: open
+`/usr/share/doc/av-relay/devices-test.html` in your browser (from a source
+tree: `client/linux/scripts/devices-test.html`), click **Start**, and pick
+**MacBook Camera** and **MacBook Microphone**. It shows the picture, its
+size and frame rate, and a level meter for the microphone.
+
 **Logs:** start it from a terminal with `RUST_LOG=info av-relay`.
 
 ## Uninstall

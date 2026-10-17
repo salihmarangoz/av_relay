@@ -71,6 +71,7 @@ assets = [
     ["packaging/autostart.desktop", "etc/xdg/autostart/io.github.salihmarangoz.avrelay.desktop", "644"],
     ["../../README.md", "usr/share/doc/av-relay/README.md", "644"],
     ["../../docs/linux.md", "usr/share/doc/av-relay/linux.md", "644"],
+    ["scripts/devices-test.html", "usr/share/doc/av-relay/devices-test.html", "644"],
     ["packaging/70-av-relay.rules", "usr/lib/udev/rules.d/", "644"],
     ["packaging/modules-load.conf", "etc/modules-load.d/av-relay.conf", "644"],
     ["packaging/modprobe.conf", "etc/modprobe.d/av-relay.conf", "644"],
