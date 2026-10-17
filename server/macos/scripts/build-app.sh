@@ -31,9 +31,10 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resourc
 cp "$bin/AVRelay" "$app/Contents/MacOS/AVRelay"
 ditto "$bin/WebRTC.framework" "$app/Contents/Frameworks/WebRTC.framework"
 sed -e "s/@VERSION@/$version/g" -e "s/@BUILD@/$build/g" App/Info.plist >"$app/Contents/Info.plist"
-if [[ -f ../../assets/build/AppIcon.icns ]]; then
-	cp ../../assets/build/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
-fi
+# The logo (assets/logo/generate.py): the app icon and the menu bar's template images.
+icons=../../assets/generated
+cp "$icons/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
+cp "$icons"/macos-menubar/menubar-{off,on,live}{,@2x}.png "$app/Contents/Resources/"
 
 # Load frameworks from the bundle, and keep no paths of the build machine.
 exe="$app/Contents/MacOS/AVRelay"

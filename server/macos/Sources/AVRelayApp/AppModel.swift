@@ -217,10 +217,11 @@ final class AppModel: ObservableObject {
         return "Camera \(Self.describe(media.video)) · Microphone \(Self.describe(media.audio))"
     }
 
-    var statusSymbol: String {
-        if problem != nil { return "exclamationmark.triangle" }
-        if media.video.state == .on || media.audio.state == .on { return "web.camera.fill" }
-        return connected != nil ? "web.camera" : "video.slash"
+    enum IconState: String { case off, on, live }
+
+    var iconState: IconState {
+        if media.video.state == .on || media.audio.state == .on { return .live }
+        return connected != nil ? .on : .off
     }
 
     static func describe(_ state: DeviceState) -> String {

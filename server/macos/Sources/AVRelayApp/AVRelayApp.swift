@@ -34,7 +34,7 @@ struct AVRelayApp: App {
             MenuContent()
                 .environmentObject(model)
         } label: {
-            Image(systemName: model.statusSymbol)
+            MenuBarIcon(state: model.iconState)
         }
         .menuBarExtraStyle(.menu)
 
@@ -108,6 +108,22 @@ struct MenuContent: View {
         alert.addButton(withTitle: "Cancel")
         if alert.runModal() == .alertFirstButtonReturn {
             model.remove(client)
+        }
+    }
+}
+
+/// The logo as a menu bar template image: off (not connected), on
+/// (connected), live (the camera or microphone in use).
+struct MenuBarIcon: View {
+    let state: AppModel.IconState
+
+    var body: some View {
+        if let image = NSImage(named: "menubar-\(state.rawValue)") {
+            let _ = image.isTemplate = true
+            Image(nsImage: image)
+        } else {
+            // Not in an app bundle (swift run): a system symbol instead.
+            Image(systemName: state == .off ? "video.slash" : state == .on ? "web.camera" : "web.camera.fill")
         }
     }
 }
