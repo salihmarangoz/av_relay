@@ -25,14 +25,14 @@ assets/              logo script and the icons it generates
 ┌────────── sender (server): macOS app ─────────────────┐        ┌────────── receiver (client): Linux app ─────────┐
 │ menu bar UI: Allow Pairing (code), devices, status    │        │ tray: Pair with a sender…, status, Forget       │
 │                                                       │        │                                                 │
-│ control server (TCP 48100) ◄── Noise IK, JSON ─────────────────── control client ── reconnect (last IP, mDNS)   │
+│ control server (TCP 48100) ◄── Noise IK, JSON ─────────────────── control client ── reconnect (last IP, mDNS)    │
 │   pairing: CPace + Noise XXpsk3                       │        │   pairing: CPace + Noise XXpsk3                 │
 │   Bonjour _avrelay._tcp  id=<device id>               │        │                                                 │
 │                                                       │        │ device watcher: is anyone using cam / mic?      │
 │ capture on demand                                     │        │   → media {video, audio}                        │
 │   AVCaptureSession (camera)  ─┐                       │        │                                                 │
-│   microphone capture         ─┤ libwebrtc            │  UDP   │ GStreamer webrtcbin                             │
-│                               └► H.264 (VideoToolbox) ═══════════► H.264 decode ─► scale ─► v4l2loopback      │
+│   microphone capture         ─┤ libwebrtc             │  UDP   │ GStreamer webrtcbin                             │
+│                               └► H.264 (VideoToolbox) ═══════════► H.264 decode ─► scale ─► v4l2loopback         │
 │                                  Opus (in-band FEC)   │ DTLS-  │   "AV Relay Camera"                             │
 │                                  GCC, pacing, RTX     │ SRTP   │ Opus decode ─► PipeWire Audio/Source            │
 │                                                       │        │   "AV Relay Microphone" (the default input)     │
