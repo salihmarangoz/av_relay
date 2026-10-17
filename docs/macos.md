@@ -62,7 +62,8 @@ Choose **Allow Pairing…**. The window shows:
   network; normally use the Wi-Fi or Ethernet one);
 - a 6-digit code, valid for 2 minutes and for one attempt.
 
-On the receiver, choose pairing in AV Relay's menu, pick this Mac (or type
+On the receiver, choose **Pair with a sender…** in AV Relay's menu (**Pair
+with a different sender…** if it's paired already), pick this Mac (or type
 the address and port), and type the code. The pairing window then says
 **Paired with** and the computer's name.
 

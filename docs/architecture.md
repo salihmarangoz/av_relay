@@ -23,16 +23,16 @@ assets/              logo script and the icons it generates
 
 ```
 ┌────────── sender (server): macOS app ─────────────────┐        ┌────────── receiver (client): Linux app ─────────┐
-│ menu bar UI: Allow Pairing (code), devices, status    │        │ tray: Pair device…, status, Forget              │
+│ menu bar UI: Allow Pairing (code), devices, status    │        │ tray: Pair with a sender…, status, Forget       │
 │                                                       │        │                                                 │
-│ control server (TCP 48100) ◄── Noise IK, JSON ─────────────────── control client ── reconnect (last IP, mDNS)   │
+│ control server (TCP 48100) ◄── Noise IK, JSON ─────────────────── control client ── reconnect (last IP, mDNS)    │
 │   pairing: CPace + Noise XXpsk3                       │        │   pairing: CPace + Noise XXpsk3                 │
 │   Bonjour _avrelay._tcp  id=<device id>               │        │                                                 │
 │                                                       │        │ device watcher: is anyone using cam / mic?      │
 │ capture on demand                                     │        │   → media {video, audio}                        │
 │   AVCaptureSession (camera)  ─┐                       │        │                                                 │
-│   microphone capture         ─┤ libwebrtc            │  UDP   │ GStreamer webrtcbin                             │
-│                               └► H.264 (VideoToolbox) ═══════════► H.264 decode ─► scale ─► v4l2loopback      │
+│   microphone capture         ─┤ libwebrtc             │  UDP   │ GStreamer webrtcbin                             │
+│                               └► H.264 (VideoToolbox) ═══════════► H.264 decode ─► scale ─► v4l2loopback         │
 │                                  Opus (in-band FEC)   │ DTLS-  │   "AV Relay Camera"                             │
 │                                  GCC, pacing, RTX     │ SRTP   │ Opus decode ─► PipeWire Audio/Source            │
 │                                                       │        │   "AV Relay Microphone" (the default input)     │
@@ -133,7 +133,7 @@ has the details; this is the shape.
 
 | part | job |
 |---|---|
-| Tray | StatusNotifierItem (`ksni`; Ubuntu's dock shows it): status, *Pair device…*, *Keep virtual devices on*, *Forget*, quit |
+| Tray | StatusNotifierItem (`ksni`; Ubuntu's dock shows it): *Enable AV Relay*, status, *Pair with a sender…*, *Forget*, camera quality, *Keep virtual devices on*, *Start at login*, quit |
 | Pair dialog | GTK4: the sender's address and port first (or one found on the network), then the 6-digit code |
 | Control client | framing, Noise (`snow`), CPace (`curve25519-dalek`), keepalive, reconnect (last address, then Bonjour) |
 | Media | GStreamer `webrtcbin` (answerer): H.264 decode → scale/convert → virtual camera; Opus decode → virtual microphone |

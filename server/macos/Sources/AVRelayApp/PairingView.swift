@@ -44,7 +44,7 @@ struct PairingView: View {
 
     private func codeView(_ code: PairingCode, expires: Date) -> some View {
         VStack(spacing: 18) {
-            Text("On the other computer, choose **Pair device…** in AV Relay and enter:")
+            Text("On the receiver, choose **Pair with a sender…** in AV Relay's menu and enter:")
                 .multilineTextAlignment(.center)
             addresses
             Text(code.display)
