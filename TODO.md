@@ -51,7 +51,7 @@ instead of concealed.
 - Click **Enable AV Relay** off and on in the sender's menu bar menu while
   a receiver is connected.
 - Close the Mac's lid during a call: the sender ends the session before
-  sleep; the receiver shows "Waiting for …" and reconnects after wake.
+  sleep; the receiver's camera shows "Waiting for connection…" and reconnects after wake.
 - The pairing window's "No sender found" state (no sender on the network,
   or the sender switched off).
 

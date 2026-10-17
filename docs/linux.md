@@ -53,7 +53,7 @@ OBS's virtual camera, may then need its own device:
 - **AV Relay Camera** appears in apps, and **AV Relay Microphone** becomes the
   default input.
 - When the sender goes away (sleep, Wi-Fi drop), both stay for **5 minutes**:
-  the camera shows a "Waiting for <sender>…" picture and the microphone is
+  the camera shows a "Waiting for connection…" picture and the microphone is
   silent, so a call doesn't lose its devices over a short drop. When the sender
   comes back, the picture and sound come back by themselves.
 - After 5 minutes they go away, apps fall back to the built-in camera, and

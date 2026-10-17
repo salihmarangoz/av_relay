@@ -9,7 +9,7 @@
 //!   sender's camera or microphone runs only while it's used (protocol.md 9).
 //!
 //! When the connection drops, the devices stay for a grace period (5 min),
-//! the camera showing a "Waiting for <sender>…" picture and the microphone
+//! the camera showing a "Waiting for connection…" picture and the microphone
 //! silence, so a short drop goes unnoticed by apps; with "Keep virtual
 //! devices on" they stay for good. Meanwhile the core reconnects: the last
 //! address first, then wherever Bonjour finds the sender.
@@ -233,10 +233,10 @@ impl Devices {
     }
 
     /// The sender is away: the waiting picture.
-    fn show_waiting(&self, sender: Option<&str>) {
+    fn show_waiting(&self) {
         let Some(c) = &self.camera else { return };
         let format = CameraFormat { width: self.format.width, height: self.format.height, fps: self.format.fps };
-        match vcam::waiting_frame(format, sender) {
+        match vcam::waiting_frame(format) {
             Ok(frame) => c.set_placeholder(Some(frame)),
             Err(e) => log::warn!("drawing the waiting picture: {e:#}"),
         }
@@ -322,7 +322,7 @@ impl Kept {
     /// Between sessions: "keep on" makes the devices exist; otherwise they
     /// stay until the grace period ends. A pending quality change applies
     /// once no app uses the camera.
-    fn settle(&mut self, core: &Arc<Core>, sender: Option<&str>) {
+    fn settle(&mut self, core: &Arc<Core>) {
         let settings = core.store.settings().unwrap_or_default();
         if settings.keep_devices {
             self.until = None;
@@ -337,7 +337,7 @@ impl Kept {
         }
         if let Some(d) = &mut self.devices {
             d.apply_format(settings.video);
-            d.show_waiting(sender);
+            d.show_waiting();
         }
     }
 
@@ -385,15 +385,15 @@ pub async fn run(core: Arc<Core>, status: watch::Sender<Status>, mut commands: m
                 if let Err(e) = other {
                     log::error!("reading the paired sender: {e:#}");
                 }
-                kept.settle(&core, None);
+                kept.settle(&core);
                 status.send_replace(Status::NotPaired { devices: kept.hold(keep) });
-                match idle(&core, &mut kept, &mut commands, None, None, &status).await {
+                match idle(&core, &mut kept, &mut commands, None, &status).await {
                     Some(Command::Quit) | None => return,
                     _ => continue,
                 }
             }
         };
-        kept.settle(&core, Some(&sender.name));
+        kept.settle(&core);
         let hold = kept.hold(keep);
         if !matches!(*status.borrow(), Status::Searching { .. }) {
             status.send_replace(Status::Searching { sender: sender.name.clone(), last_error: None, devices: hold });
@@ -489,13 +489,13 @@ pub async fn run(core: Arc<Core>, status: watch::Sender<Status>, mut commands: m
                 Some(format!("{e:#}"))
             }
         };
-        kept.settle(&core, Some(&sender.name));
+        kept.settle(&core);
         let keep = core.store.settings().unwrap_or_default().keep_devices;
         status.send_replace(Status::Searching { sender: sender.name.clone(), last_error, devices: kept.hold(keep) });
         let cap = if kept.devices.is_some() { BACKOFF_MAX_HELD } else { BACKOFF_MAX };
         backoff = backoff.min(cap);
         // Wait before the next attempt, minding the devices and commands.
-        match idle(&core, &mut kept, &mut commands, Some(Instant::now() + backoff), Some(&sender), &status).await {
+        match idle(&core, &mut kept, &mut commands, Some(Instant::now() + backoff), &status).await {
             Some(Command::Quit) | None => return,
             Some(Command::Forget) => {
                 let _ = core.store.forget_paired_sender();
@@ -520,10 +520,8 @@ async fn idle(
     kept: &mut Kept,
     commands: &mut mpsc::UnboundedReceiver<Command>,
     wake: Option<Instant>,
-    sender: Option<&PairedSender>,
     status: &watch::Sender<Status>,
 ) -> Option<Command> {
-    let sender_name = sender.map(|m| m.name.clone());
     let publish = |kept: &Kept| {
         let hold = kept.hold(core.store.settings().unwrap_or_default().keep_devices);
         status.send_modify(|s| match s {
@@ -548,11 +546,11 @@ async fn idle(
             }
             Some(()) = kept.notify_rx.recv() => {
                 // A quality change waits for the camera to be free.
-                kept.settle(core, sender_name.as_deref());
+                kept.settle(core);
             }
             cmd = commands.recv() => match cmd {
                 Some(Command::VideoChanged) | Some(Command::KeepDevicesChanged) => {
-                    kept.settle(core, sender_name.as_deref());
+                    kept.settle(core);
                     if !core.store.settings().unwrap_or_default().keep_devices && kept.devices.is_some() && kept.until.is_none() {
                         kept.until = Some(Instant::now() + grace_period());
                     }

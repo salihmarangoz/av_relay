@@ -10,6 +10,12 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Receiver: while the sender is away, the camera's picture says "Waiting for
+  connection…" instead of naming the sender, since everyone in the call
+  sees it.
+
 ## [0.2.0] - 2026-10-17
 
 ### Added

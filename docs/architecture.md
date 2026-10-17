@@ -150,7 +150,7 @@ has the details; this is the shape.
   Relay Microphone" is the default input (the previous default is saved on
   disk first, so a crash or power loss is repaired at the next start).
 - **When it goes away**, they stay for 5 minutes, the camera showing a
-  "Waiting for …" picture and the microphone silence, so a short drop goes
+  "Waiting for connection…" picture and the microphone silence, so a short drop goes
   unnoticed by apps. Then they go, and the previous default input comes
   back. *Keep virtual devices on* keeps them for as long as AV Relay runs.
 - **Camera.** Linux has no system-wide default camera; each app picks its

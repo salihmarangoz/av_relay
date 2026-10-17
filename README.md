@@ -98,7 +98,7 @@ Microphone**. The microphone is already the default input while the sender
 is connected; most apps remember the camera you chose.
 
 If the sender drops off (sleep, Wi-Fi), the camera and microphone stay for 5
-minutes, the camera showing a "Waiting for …" picture, so a short drop
+minutes, the camera showing a "Waiting for connection…" picture, so a short drop
 doesn't break your call. Turn on **Keep virtual devices on** to keep them for
 good.
 

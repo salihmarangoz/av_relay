@@ -1,6 +1,7 @@
 //! The picture the virtual camera shows while the sender is away: the AV Relay
-//! icon and name, and "Waiting for <sender>…", drawn with cairo and pango and
-//! converted to the camera's YUYV.
+//! icon and name, and "Waiting for connection…", drawn with cairo and pango
+//! and converted to the camera's YUYV. It names no device: everyone in the
+//! call sees it.
 
 use anyhow::{Context, Result, anyhow};
 use cairo::{Context as Cairo, Format, ImageSurface, LinearGradient};
@@ -9,14 +10,13 @@ use super::CameraFormat;
 
 const ICON_PNG: &[u8] = include_bytes!("../../../../assets/generated/app-icon-256.png");
 
-/// A YUYV frame of `format` saying AV Relay is waiting for `sender` (or for
-/// "your device" when no sender is paired yet).
-pub fn waiting_frame(format: CameraFormat, sender: Option<&str>) -> Result<Vec<u8>> {
+/// A YUYV frame of `format` saying AV Relay is waiting for its connection.
+pub fn waiting_frame(format: CameraFormat) -> Result<Vec<u8>> {
     let (w, h) = (format.width as i32, format.height as i32);
     let mut surface = ImageSurface::create(Format::Rgb24, w, h).map_err(|e| anyhow!("cairo surface: {e}"))?;
     {
         let cr = Cairo::new(&surface).map_err(|e| anyhow!("cairo context: {e}"))?;
-        draw(&cr, w as f64, h as f64, sender)?;
+        draw(&cr, w as f64, h as f64)?;
     }
     surface.flush();
     let stride = surface.stride() as usize;
@@ -24,7 +24,7 @@ pub fn waiting_frame(format: CameraFormat, sender: Option<&str>) -> Result<Vec<u
     Ok(rgb24_to_yuyv(&data, w as usize, h as usize, stride))
 }
 
-fn draw(cr: &Cairo, w: f64, h: f64, sender: Option<&str>) -> Result<()> {
+fn draw(cr: &Cairo, w: f64, h: f64) -> Result<()> {
     // A dark background with a hint of the logo's blue.
     let bg = LinearGradient::new(0.0, 0.0, w, h);
     bg.add_color_stop_rgb(0.0, 0.07, 0.09, 0.16);
@@ -58,11 +58,7 @@ fn draw(cr: &Cairo, w: f64, h: f64, sender: Option<&str>) -> Result<()> {
         pangocairo::functions::show_layout(cr, &layout);
     };
     line("AV Relay", h * 0.06, pango::Weight::Bold, 1.0, y + size + h * 0.05);
-    let waiting = match sender {
-        Some(name) => format!("Waiting for {name}…"),
-        None => "Waiting for your device…".to_string(),
-    };
-    line(&waiting, h * 0.035, pango::Weight::Normal, 0.75, y + size + h * 0.15);
+    line("Waiting for connection…", h * 0.035, pango::Weight::Normal, 0.75, y + size + h * 0.15);
     Ok(())
 }
 
@@ -102,7 +98,7 @@ mod tests {
     fn renders_the_exact_frame_size() {
         for (width, height) in [(1920, 1080), (1280, 720)] {
             let format = CameraFormat { width, height, fps: 30 };
-            let frame = waiting_frame(format, Some("MacBook Air")).unwrap();
+            let frame = waiting_frame(format).unwrap();
             assert_eq!(frame.len(), format.frame_size());
             // Not just the black placeholder: the icon and text are there.
             assert!(frame.chunks_exact(2).any(|p| p[0] > 200), "no bright pixels");
