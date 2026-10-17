@@ -188,6 +188,21 @@ struct RawSession {
         #expect(f.server.store.pairedClients.isEmpty)
     }
 
+    /// Review T14 #1: before sleep the session ends with bye, and the handler hears it.
+    @Test func endActiveSessionSaysByeAndEnds() async throws {
+        let f = try await Fixture()
+        defer { Task { await f.cleanUp() } }
+        let me = NoiseKeyPair()
+        let paired = try await f.pair(me)
+        let session = try await f.session(me, server: paired.publicKey)
+        _ = try await session.receive()  // welcome
+        _ = try await session.receive()  // offer
+        await f.server.endActiveSession()
+        #expect(try await session.receive() == .bye(.quit))
+        #expect(await eventually { f.handler.ended == 1 })
+        #expect(await f.server.activeSession == nil)
+    }
+
     @Test func unknownModeOfAFutureVersionGetsTheVersionError() async throws {
         let f = try await Fixture()
         defer { Task { await f.cleanUp() } }

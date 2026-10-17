@@ -62,8 +62,11 @@ icons=../../assets/generated
 cp "$icons/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
 cp "$icons"/macos-menubar/menubar-{off,on,live}{,@2x}.png "$app/Contents/Resources/"
 
-# Load frameworks from the bundle, and keep no paths of the build machine.
+# Load frameworks from the bundle, and keep no paths of the build machine:
+# release builds still carry a debug map (OSO entries naming each object
+# file under this checkout), so strip it along with local symbols.
 exe="$app/Contents/MacOS/AVRelay"
+strip -S -x "$exe"
 install_name_tool -add_rpath @executable_path/../Frameworks "$exe"
 otool -l "$exe" | awk '/cmd LC_RPATH/ { getline; getline; print $2 }' | sort -u | while read -r path; do
 	case $path in
@@ -77,7 +80,8 @@ identity=${AVRELAY_SIGN_IDENTITY:--}
 sign=(codesign --force --timestamp=none --sign "$identity")
 if [[ -n ${AVRELAY_SIGN_KEYCHAIN:-} ]]; then
 	if [[ -n ${AVRELAY_SIGN_KEYCHAIN_PASSWORD_FILE:-} ]]; then
-		security unlock-keychain -p "$(cat "$AVRELAY_SIGN_KEYCHAIN_PASSWORD_FILE")" "$AVRELAY_SIGN_KEYCHAIN"
+		# Through security's command mode on stdin: a -p argument would show in ps.
+		printf 'unlock-keychain -p "%s" "%s"\n' "$(cat "$AVRELAY_SIGN_KEYCHAIN_PASSWORD_FILE")" "$AVRELAY_SIGN_KEYCHAIN" | security -i >/dev/null
 	fi
 	sign+=(--keychain "$AVRELAY_SIGN_KEYCHAIN")
 fi

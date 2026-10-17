@@ -24,7 +24,7 @@ struct PairingView: View {
                 if let code = model.pairingCode, let expires = model.pairingExpires {
                     codeView(code, expires: expires)
                 } else {
-                    Text("The code has expired.")
+                    Text("No pairing code is active.")
                         .foregroundStyle(.secondary)
                     Button("New Code") { model.openPairing() }
                         .keyboardShortcut(.defaultAction)
@@ -33,9 +33,8 @@ struct PairingView: View {
         }
         .padding(28)
         .frame(width: 420)
-        .onAppear {
-            if model.pairingCode == nil, model.pairingResult == nil { model.openPairing() }
-        }
+        // No code on appear: macOS may restore this window at login, and a
+        // code must only exist when the user asked for one (Allow Pairing… or New Code).
         .onDisappear { model.closePairing() }
     }
 

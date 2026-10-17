@@ -37,7 +37,11 @@ final class LoopbackClient: NSObject, SignalingChannel, RTCPeerConnectionDelegat
     private var _states: [Message] = []
     private var _connected = false
     private var _terminated = false
+    private var _offers = 0
+    private var _errors: [Message] = []
     var states: [Message] { lock.withLock { _states } }
+    var offers: Int { lock.withLock { _offers } }
+    var errors: [Message] { lock.withLock { _errors } }
     var connected: Bool { lock.withLock { _connected } }
     var localAddress: String? { nil }
 
@@ -60,7 +64,10 @@ final class LoopbackClient: NSObject, SignalingChannel, RTCPeerConnectionDelegat
     // The engine's signaling, as the client receives it.
     func send(_ message: Message) async throws {
         switch message {
+        case .error:
+            lock.withLock { _errors.append(message) }
         case .offer(let sdp):
+            lock.withLock { _offers += 1 }
             // AVRELAY_OFFER_FILE=path: keep a real offer, e.g. to check a client's answer offline.
             if let path = ProcessInfo.processInfo.environment["AVRELAY_OFFER_FILE"] {
                 try? sdp.write(toFile: path, atomically: true, encoding: .utf8)

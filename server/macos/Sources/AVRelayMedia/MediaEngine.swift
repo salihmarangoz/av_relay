@@ -122,17 +122,19 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
     /// Switches the camera; a running capture moves over at once.
     public func setCamera(_ source: CameraSource) {
         queue.async { [self] in
+            guard settings.camera != source else { return }
             settings.camera = source
             camera.setSource(source, format: call?.format ?? Self.defaultFormat)
-            call?.reportState()
+            call?.deviceChanged(.video)
         }
     }
 
     public func setMicrophone(_ source: MicrophoneSource) {
         queue.async { [self] in
+            guard settings.microphone != source else { return }
             settings.microphone = source
             microphone.setSource(source)
-            call?.reportState()
+            call?.deviceChanged(.audio)
         }
     }
 
@@ -195,7 +197,8 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
     enum Kind { case video, audio }
 
     final class Call: NSObject, RTCPeerConnectionDelegate {
-        unowned let engine: MediaEngine
+        // Strong: the engine drops its call when the session ends.
+        let engine: MediaEngine
         let channel: SignalingChannel
         let format: VideoFormat
         private var outbox: AsyncStream<Message>.Continuation?
@@ -204,6 +207,10 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
         private var videoSender: RTCRtpSender?
         private var audioSender: RTCRtpSender?
         private var remoteDescriptionSet = false
+        /// An offer is out and its answer not yet applied: one at a time.
+        private var offering = false
+        /// An ICE restart asked for while an offer was out; it follows the answer.
+        private var restartPending = false
         private var pendingCandidates: [RTCIceCandidate] = []
         private var wanted: [Kind: Bool] = [.video: false, .audio: false]
         private var states: [Kind: DeviceState] = [.video: .off, .audio: .off]
@@ -239,6 +246,7 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
             let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
             guard let peer = engine.factory.peerConnection(with: config, constraints: constraints, delegate: self) else {
                 log.error("couldn't create the peer connection")
+                Task { [channel] in await channel.terminate() }
                 return
             }
             self.peer = peer
@@ -309,12 +317,18 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
             guard !closed else { return }
             switch message {
             case .answer(let sdp):
+                // Only the outstanding offer is answered; anything else is stale.
+                guard offering else {
+                    log.info("ignoring an answer to no outstanding offer")
+                    return
+                }
                 peer?.setRemoteDescription(RTCSessionDescription(type: .answer, sdp: sdp)) { [weak self] error in
                     self?.queue.async { self?.answerApplied(error) }
                 }
             case let .ice(candidate, sdpMid, sdpMLineIndex):
                 guard !candidate.isEmpty else { return }  // end of candidates
-                let ice = RTCIceCandidate(sdp: candidate, sdpMLineIndex: Int32(sdpMLineIndex ?? 0), sdpMid: sdpMid)
+                guard let index = Int32(exactly: sdpMLineIndex ?? 0) else { return }
+                let ice = RTCIceCandidate(sdp: candidate, sdpMLineIndex: index, sdpMid: sdpMid)
                 if remoteDescriptionSet {
                     add(ice)
                 } else {
@@ -331,16 +345,21 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
         }
 
         private func answerApplied(_ error: Error?) {
+            offering = false
             if let error {
                 log.error("the client's answer: \(error.localizedDescription, privacy: .public)")
                 Task { [channel] in
                     try? await channel.send(.error(.badMessage, "answer rejected"))
                 }
-                return
+            } else {
+                remoteDescriptionSet = true
+                pendingCandidates.forEach(add)
+                pendingCandidates = []
             }
-            remoteDescriptionSet = true
-            pendingCandidates.forEach(add)
-            pendingCandidates = []
+            if restartPending {
+                restartPending = false
+                makeOffer(iceRestart: true)
+            }
         }
 
         private func add(_ candidate: RTCIceCandidate) {
@@ -350,7 +369,12 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
         }
 
         private func makeOffer(iceRestart: Bool) {
-            guard let peer else { return }
+            guard let peer, !closed else { return }
+            guard !offering else {
+                if iceRestart { restartPending = true }
+                return
+            }
+            offering = true
             let constraints = RTCMediaConstraints(mandatoryConstraints: iceRestart ? ["IceRestart": "true"] : nil,
                                                   optionalConstraints: nil)
             peer.offer(for: constraints) { [weak self] sdp, error in
@@ -358,12 +382,14 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
                 queue.async {
                     guard let sdp, !self.closed else {
                         self.log.error("offer: \(error?.localizedDescription ?? "?", privacy: .public)")
+                        self.offering = false
                         return
                     }
                     peer.setLocalDescription(sdp) { error in
                         self.queue.async {
                             if let error {
                                 self.log.error("local description: \(error.localizedDescription, privacy: .public)")
+                                self.offering = false
                                 return
                             }
                             self.outbox?.yield(.offer(sdp: sdp.sdp))
@@ -453,6 +479,20 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
             }
         }
 
+        /// The user picked another camera or microphone (protocol section 9):
+        /// one in use restarts on it, one that failed gets another try.
+        func deviceChanged(_ kind: Kind) {
+            guard !closed else { return }
+            switch states[kind]!.state {
+            case .on:
+                setState(kind, DeviceState(state: .starting))  // on again at the new device's first frame/buffer
+            case .error where wanted[kind] == true:
+                begin(kind)
+            default:
+                reportState()
+            }
+        }
+
         func deviceFailed(_ kind: Kind, _ error: DeviceState.ErrorCode) {
             guard !closed else { return }
             switch kind {
@@ -482,8 +522,8 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
         func reportState() {
             guard !closed else { return }
             var video = states[.video]!, audio = states[.audio]!
-            video.device = engine.camera.deviceName
-            audio.device = engine.microphone.deviceName
+            video.device = CameraCapture.deviceName(for: engine.settings.camera)
+            audio.device = MicrophoneDevice.deviceName(for: engine.settings.microphone)
             let message = Message.mediaState(video: video, audio: audio)
             guard message != lastReported else { return }
             lastReported = message

@@ -39,6 +39,11 @@ final class CameraCapture: NSObject, @unchecked Sendable {
     /// The camera mode in use, e.g. "1280x720 at 30 fps max" (diagnostics).
     private(set) var activeMode: String?
     private var observers: [NSObjectProtocol] = []
+    /// Counts starts, so a late notification or watchdog from an earlier
+    /// start can't touch the current one.
+    private var generation = 0
+    /// How long a start may take to deliver its first frame.
+    static let startTimeout: TimeInterval = 10
 
     init(videoSource: RTCVideoSource, source: CameraSource) {
         self.videoSource = videoSource
@@ -46,15 +51,18 @@ final class CameraCapture: NSObject, @unchecked Sendable {
         self.source = source
     }
 
-    var deviceName: String? {
+    /// The user-facing name of the camera a source uses (nil: it isn't there).
+    static func deviceName(for source: CameraSource) -> String? {
         switch source {
         case .testPattern: return "Test pattern"
-        case .device(let id): return Self.captureDevice(id: id)?.localizedName
+        case .device(let id): return captureDevice(id: id)?.localizedName
         }
     }
 
+    /// The chosen camera, or the built-in one when none was chosen. A chosen
+    /// camera that isn't connected is nil: never silently another one.
     static func captureDevice(id: String?) -> AVCaptureDevice? {
-        if let id, let device = AVCaptureDevice(uniqueID: id) { return device }
+        if let id { return AVCaptureDevice(uniqueID: id) }
         let devices = AVCaptureDevice.DiscoverySession(deviceTypes: [.builtInWideAngleCamera, .external, .continuityCamera],
                                                        mediaType: .video, position: .unspecified).devices
         return devices.first { $0.transportType == Int32(bitPattern: kAudioDeviceTransportTypeBuiltIn) }
@@ -67,6 +75,7 @@ final class CameraCapture: NSObject, @unchecked Sendable {
             source = newSource
             if running {
                 stopCapture()
+                deliveredSinceStart = false
                 startCapture(format: format)
             }
         }
@@ -95,9 +104,16 @@ final class CameraCapture: NSObject, @unchecked Sendable {
     // MARK: On `queue`
 
     private func startCapture(format: VideoFormat) {
+        generation += 1
+        let started = generation
         switch source {
         case .testPattern: startPattern(format: format)
-        case .device(let id): startDevice(id: id, format: format)
+        case .device(let id): startDevice(id: id, format: format, generation: started)
+        }
+        // A camera that never delivers (stuck, taken by another app) is a failure, not "starting" forever.
+        queue.asyncAfter(deadline: .now() + Self.startTimeout) { [weak self] in
+            guard let self, running, generation == started, !deliveredSinceStart else { return }
+            fail(.failed)
         }
     }
 
@@ -111,7 +127,7 @@ final class CameraCapture: NSObject, @unchecked Sendable {
         session = nil
     }
 
-    private func startDevice(id: String?, format: VideoFormat) {
+    private func startDevice(id: String?, format: VideoFormat, generation started: Int) {
         guard let device = Self.captureDevice(id: id) else { return fail(.noDevice) }
         guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else { return fail(.permissionDenied) }
         let session = AVCaptureSession()
@@ -139,11 +155,11 @@ final class CameraCapture: NSObject, @unchecked Sendable {
                                                                 object: session, queue: nil) { [weak self] note in
             let error = note.userInfo?[AVCaptureSessionErrorKey] as? Error
             self?.log.error("camera runtime error: \(error?.localizedDescription ?? "?", privacy: .public)")
-            self?.queue.async { self?.fail(.failed) }
+            self?.failIfCurrent(started, .failed)
         })
         observers.append(NotificationCenter.default.addObserver(forName: AVCaptureDevice.wasDisconnectedNotification,
                                                                 object: device, queue: nil) { [weak self] _ in
-            self?.queue.async { self?.fail(.noDevice) }
+            self?.failIfCurrent(started, .noDevice)
         })
         self.session = session
         session.startRunning()
@@ -231,6 +247,13 @@ final class CameraCapture: NSObject, @unchecked Sendable {
         }
         chromaRow.withUnsafeBytes { row in
             for r in 0..<(height / 2) { (uv + r * uvStride).copyMemory(from: row.baseAddress!, byteCount: width) }
+        }
+    }
+
+    private func failIfCurrent(_ started: Int, _ error: DeviceState.ErrorCode) {
+        queue.async { [self] in
+            guard running, generation == started else { return }
+            fail(error)
         }
     }
 

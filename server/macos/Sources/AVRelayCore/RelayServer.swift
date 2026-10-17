@@ -139,6 +139,16 @@ public actor RelayServer {
         return ready
     }
 
+    /// Ends the current session, saying bye first: before the Mac sleeps, so
+    /// capture stops now and can't resume on wake for a client that's gone.
+    /// The client reconnects once the Mac is awake.
+    public func endActiveSession() async {
+        guard let session = active else { return }
+        active = nil
+        await session.close(sending: .bye(.quit))
+        endSession(session, reason: "quit")
+    }
+
     public func stop() async {
         listener?.cancel()
         listener = nil

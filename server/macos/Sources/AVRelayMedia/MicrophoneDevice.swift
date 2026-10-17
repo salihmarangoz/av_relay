@@ -39,16 +39,20 @@ final class MicrophoneDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
     private var output: AVCaptureAudioDataOutput?
     private var timer: DispatchSourceTimer?
     private var phase = 0.0
+    private var observers: [NSObjectProtocol] = []
+    /// Counts starts, so a late notification or watchdog from an earlier
+    /// start can't touch the current one.
+    private var generation = 0
 
     init(source: MicrophoneSource) {
         self.source = source
     }
 
-    /// The name of the device that will be used, for media-state.
-    var deviceName: String? {
+    /// The user-facing name of the microphone a source uses (nil: it isn't there).
+    static func deviceName(for source: MicrophoneSource) -> String? {
         switch source {
         case .testTone: return "Test tone"
-        case .device(let id): return Self.captureDevice(id: id)?.localizedName
+        case .device(let id): return captureDevice(id: id)?.localizedName
         }
     }
 
@@ -59,13 +63,16 @@ final class MicrophoneDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
             source = newSource
             if recording {
                 stopCapture()
+                deliveredSinceStart = false
                 startCapture()
             }
         }
     }
 
+    /// The chosen microphone, or the built-in one when none was chosen. A
+    /// chosen microphone that isn't connected is nil: never silently another.
     static func captureDevice(id: String?) -> AVCaptureDevice? {
-        if let id, let device = AVCaptureDevice(uniqueID: id) { return device }
+        if let id { return AVCaptureDevice(uniqueID: id) }
         let devices = AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone], mediaType: .audio,
                                                        position: .unspecified).devices
         return devices.first { $0.transportType == Int32(bitPattern: kAudioDeviceTransportTypeBuiltIn) }
@@ -133,22 +140,31 @@ final class MicrophoneDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
     // MARK: Capture (on `queue`)
 
     private func startCapture() {
+        generation += 1
+        let started = generation
         switch source {
         case .testTone: startTone()
-        case .device(let id): startDevice(id: id)
+        case .device(let id): startDevice(id: id, generation: started)
+        }
+        // A microphone that never delivers is a failure, not "starting" forever.
+        queue.asyncAfter(deadline: .now() + CameraCapture.startTimeout) { [weak self] in
+            guard let self, recording, generation == started, !deliveredSinceStart else { return }
+            fail(.failed)
         }
     }
 
     private func stopCapture() {
         timer?.cancel()
         timer = nil
+        observers.forEach(NotificationCenter.default.removeObserver)
+        observers = []
         output?.setSampleBufferDelegate(nil, queue: nil)
         session?.stopRunning()
         session = nil
         output = nil
     }
 
-    private func startDevice(id: String?) {
+    private func startDevice(id: String?, generation started: Int) {
         guard let device = Self.captureDevice(id: id) else { return fail(.noDevice) }
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return fail(.permissionDenied) }
         let session = AVCaptureSession()
@@ -173,6 +189,17 @@ final class MicrophoneDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
             AVLinearPCMIsNonInterleaved: false,
         ]
         output.setSampleBufferDelegate(self, queue: queue)
+        // Unplugged, or taken away by the system: say so, don't stay "on" with silence.
+        observers.append(NotificationCenter.default.addObserver(forName: AVCaptureSession.runtimeErrorNotification,
+                                                                object: session, queue: nil) { [weak self] note in
+            let error = note.userInfo?[AVCaptureSessionErrorKey] as? Error
+            self?.log.error("microphone runtime error: \(error?.localizedDescription ?? "?", privacy: .public)")
+            self?.failIfCurrent(started, .failed)
+        })
+        observers.append(NotificationCenter.default.addObserver(forName: AVCaptureDevice.wasDisconnectedNotification,
+                                                                object: device, queue: nil) { [weak self] _ in
+            self?.failIfCurrent(started, .noDevice)
+        })
         self.session = session
         self.output = output
         session.startRunning()
@@ -194,6 +221,13 @@ final class MicrophoneDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
         }
         self.timer = timer
         timer.resume()
+    }
+
+    private func failIfCurrent(_ started: Int, _ error: DeviceState.ErrorCode) {
+        queue.async { [self] in
+            guard recording, generation == started else { return }
+            fail(error)
+        }
     }
 
     private func fail(_ error: DeviceState.ErrorCode) {

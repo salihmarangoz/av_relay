@@ -105,6 +105,41 @@ enum Hardware {
     }
 }
 
+@Suite(.serialized) struct NegotiationTests {
+    /// Review T14 #7: restarts asked for while an offer is out wait for its
+    /// answer; a stale answer is ignored; a bad ICE index is dropped.
+    @Test func restartsQueueAndStaleAnswersAreIgnored() async throws {
+        var settings = MediaEngine.Settings()
+        settings.camera = .testPattern
+        settings.microphone = .testTone
+        let engine = MediaEngine(settings: settings)
+        let client = LoopbackClient(engine: engine)
+        defer {
+            engine.end(channel: client)
+            client.peer.close()
+        }
+        engine.start(channel: client, hello: Hello(name: "test", app: "test", video: VideoFormat(width: 640, height: 480, fps: 30)))
+        #expect(await waitUntil { client.connected })
+        #expect(client.offers == 1)
+
+        engine.receive(.iceRestart, from: client)
+        engine.receive(.iceRestart, from: client)
+        #expect(await waitUntil { client.offers == 3 })
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(client.offers == 3)
+        #expect(client.errors.isEmpty, "\(client.errors)")
+
+        engine.receive(.answer(sdp: "v=0\r\n"), from: client)  // answers nothing outstanding
+        engine.receive(.ice(candidate: "candidate:1 1 udp 1 192.0.2.10 9 typ host", sdpMid: "0", sdpMLineIndex: Int.max), from: client)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(client.errors.isEmpty, "\(client.errors)")
+
+        // Media still flows after the restarts.
+        engine.receive(.media(video: true, audio: false), from: client)
+        #expect(await waitUntil { client.frames.count > 10 })
+    }
+}
+
 @Suite struct MediaUnitTests {
     @Test func levelIsRaisedTo5_1() {
         func raised(_ id: String) -> String? {

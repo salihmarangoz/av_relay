@@ -43,14 +43,21 @@ final class AppModel: ObservableObject {
 
     @Published var openAtLogin: Bool {
         didSet {
-            guard openAtLogin != (SMAppService.mainApp.status == .enabled) else { return }
+            guard openAtLogin != Self.loginItemOn else { return }
             do {
                 if openAtLogin { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
             } catch {
                 problem = "Couldn't change Open at Login: \(error.localizedDescription)"
-                openAtLogin = SMAppService.mainApp.status == .enabled
+                // System Settings › General › Login Items can always change it.
+                SMAppService.openSystemSettingsLoginItems()
             }
+            if openAtLogin != Self.loginItemOn { openAtLogin = Self.loginItemOn }
         }
+    }
+
+    /// On, or waiting for the user's approval in System Settings (which still counts as asked for).
+    static var loginItemOn: Bool {
+        [.enabled, .requiresApproval].contains(SMAppService.mainApp.status)
     }
 
     private(set) var port: UInt16
@@ -61,6 +68,7 @@ final class AppModel: ObservableObject {
     private var server: RelayServer?
     private var eventsTask: Task<Void, Never>?
     private var deviceObservers: [NSObjectProtocol] = []
+    private var systemObservers: [NSObjectProtocol] = []
 
     enum Keys {
         static let camera = "camera", microphone = "microphone", port = "port"
@@ -77,7 +85,7 @@ final class AppModel: ObservableObject {
         let microphone = defaults.string(forKey: Keys.microphone)
         cameraChoice = camera
         microphoneChoice = microphone
-        openAtLogin = SMAppService.mainApp.status == .enabled
+        openAtLogin = Self.loginItemOn
         let savedPort = defaults.integer(forKey: Keys.port)
         port = (1...65535).contains(savedPort) ? UInt16(savedPort) : Self.defaultPort
 
@@ -106,18 +114,49 @@ final class AppModel: ObservableObject {
                 Task { @MainActor in self?.refreshDevices() }
             })
         }
+        observeSleepAndQuit()
         Task { await startServer() }
+    }
+
+    /// Before the Mac sleeps, end the session: capture stops now, and can't
+    /// resume on wake for a client that's long gone (the client reconnects
+    /// after the wake). On quit, say bye so the client knows at once.
+    private func observeSleepAndQuit() {
+        systemObservers.append(NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in await self?.server?.endActiveSession() }
+        })
+        systemObservers.append(NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let server = MainActor.assumeIsolated({ self?.server }) else { return }
+            let done = DispatchSemaphore(value: 0)
+            Task.detached {
+                await server.stop()
+                done.signal()
+            }
+            _ = done.wait(timeout: .now() + 1)
+        })
     }
 
     /// AV Relay should run whenever the Mac is on, so Open at Login starts
     /// out on. Only the first launch does this: if the user turns it off,
     /// it stays off. (Not for the self-test, which only runs and quits.)
+    /// Only for a copy in Applications: a login item for the copy in the
+    /// disk image (or a quarantined, translocated copy) would break once
+    /// the user installs it, and would use up the one-time default.
     private func enableOpenAtLoginOnFirstLaunch() {
-        guard !defaults.bool(forKey: Keys.loginItemDefaulted), !CommandLine.arguments.contains("--self-test") else { return }
+        guard !defaults.bool(forKey: Keys.loginItemDefaulted), !CommandLine.arguments.contains("--self-test"),
+              Self.isInApplications else { return }
         defaults.set(true, forKey: Keys.loginItemDefaulted)
-        if SMAppService.mainApp.status != .enabled {
+        if !Self.loginItemOn {
             openAtLogin = true
         }
+    }
+
+    static var isInApplications: Bool {
+        let path = Bundle.main.bundleURL.resolvingSymlinksInPath().path
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return path.hasPrefix("/Applications/") || path.hasPrefix(home + "/Applications/")
     }
 
     // MARK: Server
@@ -182,6 +221,10 @@ final class AppModel: ObservableObject {
             await server?.stop()
             server = nil
             connected = nil
+            // The old server's code is gone with it.
+            pairingCode = nil
+            pairingExpires = nil
+            pairingResult = nil
             await startServer()
         }
     }
