@@ -51,8 +51,10 @@ WebRTC's discovery machinery (ICE) is reduced to host candidates on the LAN,
 and its signaling runs over our own authenticated channel.
 
 **Video: H.264.** Senders encode it in hardware (the macOS sender with
-VideoToolbox: low latency, no B-frames), and every receiver can decode it, in
-hardware (VA-API, NVDEC) or software (libavcodec). VP8, VP9 and AV1 would be
+VideoToolbox: low latency, no B-frames), and every receiver can decode it.
+The Linux receiver decodes in software (libavcodec): 1080p30 is cheap for any
+recent CPU, and it behaves the same on every machine, with no GPU driver
+involved and no discrete GPU woken. VP8, VP9 and AV1 would be
 software-encoded on a Mac, and HEVC is not a WebRTC baseline codec.
 
 **Audio: Opus**, mono 48 kHz, 20 ms frames, in-band FEC: the standard for
