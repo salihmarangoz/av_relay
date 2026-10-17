@@ -35,6 +35,10 @@ const PING_EVERY: Duration = Duration::from_secs(5);
 const SILENCE_LIMIT: Duration = Duration::from_secs(15);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
 const BONJOUR_WAIT: Duration = Duration::from_secs(3);
+/// webrtcbin doesn't recover well through ICE restarts: when media stays
+/// failed this long, start a fresh session instead (the Mac would give up
+/// after 30 s anyway, protocol.md 10).
+const MEDIA_FAILED_LIMIT: Duration = Duration::from_secs(10);
 
 /// What the UI shows.
 #[derive(Debug, Clone, PartialEq)]
@@ -444,6 +448,7 @@ async fn serve(
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut ping_id = 0u64;
     let mut last_heard = Instant::now();
+    let mut media_failed_since: Option<Instant> = None;
     loop {
         tokio::select! {
             event = events.recv() => {
@@ -486,13 +491,23 @@ async fn serve(
                     }
                     Event::Media(MediaEvent::Answer(sdp)) => writer.send(&ClientMsg::Answer { sdp }).await?,
                     Event::Media(MediaEvent::Candidate(c)) => writer.send(&ClientMsg::Ice(c)).await?,
-                    Event::Media(MediaEvent::State(state)) => log::info!("media {state}"),
+                    Event::Media(MediaEvent::State(state)) => {
+                        log::info!("media {state}");
+                        match state.as_str() {
+                            "failed" => { media_failed_since.get_or_insert_with(Instant::now); }
+                            "connected" => media_failed_since = None,
+                            _ => {}
+                        }
+                    }
                     Event::Media(MediaEvent::Error(e)) => return Err(anyhow!("media: {e}")),
                 }
             }
             _ = ping.tick() => {
                 if last_heard.elapsed() > SILENCE_LIMIT {
                     return Err(anyhow!("the Mac stopped answering"));
+                }
+                if media_failed_since.is_some_and(|t| t.elapsed() > MEDIA_FAILED_LIMIT) {
+                    return Err(anyhow!("the media connection failed and didn't recover"));
                 }
                 ping_id += 1;
                 writer.send(&ClientMsg::Ping { id: ping_id }).await?;
