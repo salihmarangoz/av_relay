@@ -36,6 +36,9 @@ gtk = { version = "0.11", package = "gtk4", features = ["v4_14"] }
 adw = { version = "0.9", package = "libadwaita", features = ["v1_5"] }
 async-channel = "2.5.0"
 ksni = "0.3"
+cairo-rs = { version = "0.22", features = ["png"] }
+pangocairo = "0.22"
+pango = "0.22"
 
 [profile.release]
 lto = "thin"

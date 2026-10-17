@@ -72,6 +72,17 @@ fn build(ui: &Rc<Ui>) -> adw::Window {
             let _ = events.try_send(UiEvent::SetVideo(video));
         }
     });
+    let keep = adw::SwitchRow::builder()
+        .title("Keep virtual devices on")
+        .subtitle("Keep the camera and microphone (and the default input) while the Mac is away")
+        .active(ui.core.store().settings().unwrap_or_default().keep_devices)
+        .build();
+    keep.connect_active_notify({
+        let events = ui.events.clone();
+        move |row| {
+            let _ = events.try_send(UiEvent::SetKeepDevices(row.is_active()));
+        }
+    });
     let login = adw::SwitchRow::builder().title("Start at login").active(autostart::is_enabled()).build();
     login.connect_active_notify({
         let events = ui.events.clone();
@@ -80,6 +91,7 @@ fn build(ui: &Rc<Ui>) -> adw::Window {
         }
     });
     settings.add(&quality);
+    settings.add(&keep);
     settings.add(&login);
     page.add(&settings);
 
@@ -117,8 +129,14 @@ fn build(ui: &Rc<Ui>) -> adw::Window {
         move |status: &Status| {
             let (title, subtitle) = match status {
                 Status::Starting => ("Starting…".to_string(), String::new()),
-                Status::NotPaired => ("Not paired with a Mac".to_string(), "Pair to use its camera and microphone.".to_string()),
-                Status::Searching { mac, last_error } => (format!("Looking for {mac}…"), last_error.clone().unwrap_or_default()),
+                Status::NotPaired { devices } => (
+                    "Not paired with a Mac".to_string(),
+                    super::tray::hold_line(*devices).unwrap_or_else(|| "Pair to use its camera and microphone.".to_string()),
+                ),
+                Status::Searching { mac, last_error, devices } => (
+                    format!("Looking for {mac}…"),
+                    [super::tray::hold_line(*devices), last_error.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · "),
+                ),
                 Status::Connected { mac, .. } => (format!("Connected to {mac}"), String::new()),
             };
             mac_row.set_title(&glib::markup_escape_text(&title));
@@ -130,7 +148,7 @@ fn build(ui: &Rc<Ui>) -> adw::Window {
                 camera_row.set_subtitle(&glib::markup_escape_text(&device_subtitle(camera)));
                 mic_row.set_subtitle(&glib::markup_escape_text(&device_subtitle(mic)));
             }
-            let paired = !matches!(status, Status::NotPaired | Status::Starting);
+            let paired = !matches!(status, Status::NotPaired { .. } | Status::Starting);
             pair.set_title(if paired { "Pair with another Mac…" } else { "Pair with a Mac…" });
             forget.set_visible(paired);
         }

@@ -1,7 +1,7 @@
 //! The tray icon and its menu (StatusNotifierItem, which Ubuntu's dock
 //! shows). Everything it does goes to the GTK side as a [`UiEvent`].
 
-use crate::app::{Device, Status};
+use crate::app::{Device, Hold, Status};
 use crate::proto::{CaptureState, VideoFormat};
 
 use super::{APP_ID, UiEvent, icons};
@@ -13,6 +13,7 @@ pub struct Tray {
     pub status: Status,
     pub problems: Vec<String>,
     pub autostart: bool,
+    pub keep_devices: bool,
     pub video: VideoFormat,
     pub events: async_channel::Sender<UiEvent>,
 }
@@ -32,7 +33,7 @@ impl Tray {
     fn headline(&self) -> String {
         match &self.status {
             Status::Starting => "Starting…".into(),
-            Status::NotPaired => "Not paired with a Mac".into(),
+            Status::NotPaired { .. } => "Not paired with a Mac".into(),
             Status::Searching { mac, .. } => format!("Looking for {mac}…"),
             Status::Connected { mac, .. } => format!("Connected to {mac}"),
         }
@@ -99,6 +100,11 @@ impl ksni::Tray for Tray {
         if let Status::Searching { last_error: Some(e), .. } = &self.status {
             items.push(info(shorten(e, 60)));
         }
+        if let Status::Searching { devices, .. } | Status::NotPaired { devices } = &self.status {
+            if let Some(line) = hold_line(*devices) {
+                items.push(info(line));
+            }
+        }
         if let Status::Connected { camera, mic, .. } = &self.status {
             items.push(info(device_line("Camera", camera)));
             items.push(info(device_line("Microphone", mic)));
@@ -116,7 +122,7 @@ impl ksni::Tray for Tray {
         }
         items.push(MenuItem::Separator);
 
-        let paired = !matches!(self.status, Status::NotPaired | Status::Starting);
+        let paired = !matches!(self.status, Status::NotPaired { .. } | Status::Starting);
         items.push(
             StandardItem {
                 label: if paired { "Pair with another Mac…".into() } else { "Pair with a Mac…".into() },
@@ -159,6 +165,18 @@ impl ksni::Tray for Tray {
         );
         items.push(
             CheckmarkItem {
+                label: "Keep virtual devices on".into(),
+                checked: self.keep_devices,
+                activate: Box::new(|t: &mut Self| {
+                    t.keep_devices = !t.keep_devices;
+                    t.send(UiEvent::SetKeepDevices(t.keep_devices));
+                }),
+                ..Default::default()
+            }
+            .into(),
+        );
+        items.push(
+            CheckmarkItem {
                 label: "Start at login".into(),
                 checked: self.autostart,
                 activate: Box::new(|t: &mut Self| {
@@ -179,6 +197,21 @@ impl ksni::Tray for Tray {
             .into(),
         );
         items
+    }
+}
+
+/// "Camera and microphone stay until 11:23" while the Mac is away.
+pub fn hold_line(hold: Hold) -> Option<String> {
+    match hold {
+        Hold::None => None,
+        Hold::Always => Some("Camera and microphone kept on".into()),
+        Hold::Until(t) => {
+            let at = gtk::glib::DateTime::from_unix_local(t as i64).ok().and_then(|d| d.format("%H:%M").ok());
+            Some(match at {
+                Some(at) => format!("Camera and microphone stay until {at}"),
+                None => "Camera and microphone stay for a few minutes".into(),
+            })
+        }
     }
 }
 

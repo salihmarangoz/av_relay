@@ -26,11 +26,14 @@ pub struct Settings {
     /// Set once the first start has turned "start at login" on, so turning
     /// it off later sticks.
     pub autostart_offered: bool,
+    /// Keep the virtual camera and microphone (and the default input) while
+    /// the Mac is away, instead of removing them after the grace period.
+    pub keep_devices: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { video: VideoFormat { width: 1920, height: 1080, fps: 30 }, autostart_offered: false }
+        Self { video: VideoFormat { width: 1920, height: 1080, fps: 30 }, autostart_offered: false, keep_devices: false }
     }
 }
 
@@ -224,7 +227,7 @@ mod tests {
     fn settings_default_and_round_trip() {
         let store = temp_store();
         assert_eq!(store.settings().unwrap().video, VideoFormat { width: 1920, height: 1080, fps: 30 });
-        let s = Settings { video: VideoFormat { width: 1280, height: 720, fps: 30 }, autostart_offered: true };
+        let s = Settings { video: VideoFormat { width: 1280, height: 720, fps: 30 }, autostart_offered: true, keep_devices: true };
         store.save_settings(&s).unwrap();
         assert_eq!(store.settings().unwrap(), s);
         fs::remove_dir_all(store.dir()).unwrap();

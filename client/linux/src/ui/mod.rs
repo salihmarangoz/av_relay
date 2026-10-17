@@ -32,6 +32,7 @@ pub enum UiEvent {
     ConfirmForget,
     SetVideo(VideoFormat),
     SetAutostart(bool),
+    SetKeepDevices(bool),
     /// The desktop's tray host appeared or went away.
     TrayAvailable(bool),
     Quit,
@@ -81,6 +82,7 @@ pub fn run() -> Result<()> {
         status: Status::Starting,
         problems: core.problems().to_vec(),
         autostart: autostart::is_enabled(),
+        keep_devices: settings.keep_devices,
         video: settings.video,
         events: ui_tx.clone(),
     };
@@ -152,9 +154,9 @@ pub fn run() -> Result<()> {
                             if let Err(e) = store.save_settings(&s) {
                                 log::error!("saving settings: {e:#}");
                             }
-                            // The camera's format is fixed while apps may
-                            // use it; apply it with a fresh connection.
-                            let _ = ui.commands.send(Command::Paired);
+                            // The camera's format is fixed while apps use
+                            // it: the core applies it once the camera is free.
+                            let _ = ui.commands.send(Command::VideoChanged);
                         }
                         ui.rt.spawn({
                             let tray = tray.clone();
@@ -167,6 +169,21 @@ pub fn run() -> Result<()> {
                             log::warn!("no tray host (on GNOME: the Ubuntu AppIndicators extension); showing the status window");
                             status::show(&ui);
                         }
+                    }
+                    UiEvent::SetKeepDevices(on) => {
+                        let store = ui.core.store();
+                        let mut s = store.settings().unwrap_or_default();
+                        if s.keep_devices != on {
+                            s.keep_devices = on;
+                            if let Err(e) = store.save_settings(&s) {
+                                log::error!("saving settings: {e:#}");
+                            }
+                            let _ = ui.commands.send(Command::KeepDevicesChanged);
+                        }
+                        ui.rt.spawn({
+                            let tray = tray.clone();
+                            async move { tray.update(|t| t.keep_devices = on).await }
+                        });
                     }
                     UiEvent::SetAutostart(on) => {
                         if let Err(e) = autostart::set(on) {

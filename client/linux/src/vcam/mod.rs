@@ -11,6 +11,9 @@
 //! should start capturing.
 
 mod sys;
+mod waiting;
+
+pub use waiting::waiting_frame;
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -156,6 +159,8 @@ struct State {
     in_use: bool,
     /// The newest frame from the Mac; empty until one arrives.
     frame: Vec<u8>,
+    /// Shown while there is no frame: black, or the waiting picture.
+    placeholder: Vec<u8>,
     /// When the newest frame arrived.
     last_push: Instant,
     last_write: Instant,
@@ -164,7 +169,6 @@ struct State {
 struct Shared {
     file: File,
     format: CameraFormat,
-    placeholder: Vec<u8>,
     state: Mutex<State>,
     wake: Condvar,
     stop: AtomicBool,
@@ -241,20 +245,26 @@ impl VirtualCamera {
         unsafe { sys::vidioc_subscribe_event(file.as_raw_fd(), &sub) }
             .context("subscribing to v4l2loopback's client-usage events")?;
 
-        // Black: Y = 16, Cb = Cr = 128 (limited range).
-        let placeholder = [16u8, 128].repeat(format.frame_size() / 2);
+        let placeholder = black(format);
         let shared = Arc::new(Shared {
             file,
             format,
-            placeholder,
-            state: Mutex::new(State { in_use: false, frame: Vec::new(), last_push: Instant::now(), last_write: Instant::now() }),
+            state: Mutex::new(State {
+                in_use: false,
+                frame: Vec::new(),
+                placeholder,
+                last_push: Instant::now(),
+                last_write: Instant::now(),
+            }),
             wake: Condvar::new(),
             stop: AtomicBool::new(false),
         });
         // The first write turns the device into a capture device for apps.
         {
             let mut state = shared.state.lock().unwrap();
-            shared.write(&shared.placeholder, &mut state);
+            let placeholder = std::mem::take(&mut state.placeholder);
+            shared.write(&placeholder, &mut state);
+            state.placeholder = placeholder;
         }
 
         let usage = {
@@ -297,6 +307,13 @@ impl VirtualCamera {
     pub fn clear(&self) {
         self.shared.state.lock().unwrap().frame.clear();
     }
+
+    /// What to show while there's no frame from the Mac: `None` is black
+    /// (the Mac's camera is starting), `Some` e.g. the waiting picture.
+    pub fn set_placeholder(&self, frame: Option<Vec<u8>>) {
+        let frame = frame.filter(|f| f.len() == self.shared.format.frame_size()).unwrap_or_else(|| black(self.shared.format));
+        self.shared.state.lock().unwrap().placeholder = frame;
+    }
 }
 
 impl Drop for VirtualCamera {
@@ -308,6 +325,11 @@ impl Drop for VirtualCamera {
         }
         log::info!("virtual camera on {} closed", self.path.display());
     }
+}
+
+/// Black in YUYV: Y = 16, Cb = Cr = 128 (limited range).
+fn black(format: CameraFormat) -> Vec<u8> {
+    [16u8, 128].repeat(format.frame_size() / 2)
 }
 
 /// udev grants the desktop user access to a new device node a moment after
@@ -397,7 +419,13 @@ fn keep_frames(shared: &Shared) {
         let now = Instant::now();
         if now >= due {
             let frame = std::mem::take(&mut state.frame);
-            shared.write(if frame.is_empty() { &shared.placeholder } else { &frame }, &mut state);
+            if frame.is_empty() {
+                let placeholder = std::mem::take(&mut state.placeholder);
+                shared.write(&placeholder, &mut state);
+                state.placeholder = placeholder;
+            } else {
+                shared.write(&frame, &mut state);
+            }
             state.frame = frame;
             continue;
         }
