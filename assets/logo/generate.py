@@ -9,7 +9,8 @@ the Mac's camera and microphone, relayed.
 
 Output (assets/generated/):
 - app-icon.svg, app-icon-<N>.png: the full-colour icon (rounded square)
-- AppIcon.iconset/ and AppIcon.icns: the same for macOS
+- AppIcon.iconset/ and AppIcon.icns: the same for macOS, inside Apple's
+  margin with its shadow
 - linux/hicolor/...: the app icon plus symbolic tray icons for three states
   (off: lens only; on: lens and arcs; live: filled lens and arcs), and an
   index.theme so a source tree can use them as a theme
@@ -204,6 +205,24 @@ def render_app_icon(size):
     return icon.resize((size, size), Image.LANCZOS)
 
 
+def render_mac_icon(size):
+    """The app icon as macOS (Big Sur and later) draws its icons: the rounded
+    square at 824/1024 of the canvas, centred, over a soft shadow (Apple's
+    template: 10 px down, 10 px blur, 30% black at 1024). Our corner radius
+    (22.37% of the square) already matches Apple's 185/824."""
+    from PIL import ImageFilter
+
+    inner = round(size * 824 / 1024)
+    margin = (size - inner) // 2
+    big, m4, i4 = size * SUPERSAMPLE, margin * SUPERSAMPLE, inner * SUPERSAMPLE
+    off = round(big * 10 / 1024)
+    shadow = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).rounded_rectangle([m4, m4 + off, m4 + i4 - 1, m4 + i4 - 1 + off], radius=corner_radius(i4), fill=(0, 0, 0, 77))
+    canvas = shadow.filter(ImageFilter.GaussianBlur(big * 10 / 1024)).resize((size, size), Image.LANCZOS)
+    canvas.alpha_composite(render_app_icon(inner), (margin, margin))
+    return canvas
+
+
 def png_bytes(img):
     buf = io.BytesIO()
     img.save(buf, "PNG", optimize=True)
@@ -233,11 +252,12 @@ def build():
     for n in sizes:
         files[f"app-icon-{n}.png"] = pngs[n]
 
-    # macOS: iconset (iconutil input) and a ready .icns.
+    # macOS: iconset (iconutil input) and a ready .icns, with Apple's margin.
+    mac = {n: png_bytes(render_mac_icon(n)) for n in sizes}
     for pt in (16, 32, 128, 256, 512):
-        files[f"AppIcon.iconset/icon_{pt}x{pt}.png"] = pngs[pt]
-        files[f"AppIcon.iconset/icon_{pt}x{pt}@2x.png"] = pngs[pt * 2]
-    files["AppIcon.icns"] = icns(pngs)
+        files[f"AppIcon.iconset/icon_{pt}x{pt}.png"] = mac[pt]
+        files[f"AppIcon.iconset/icon_{pt}x{pt}@2x.png"] = mac[pt * 2]
+    files["AppIcon.icns"] = icns(mac)
 
     # Linux: hicolor theme layout, ready to copy to /usr/share/icons.
     hi = "linux/hicolor"
