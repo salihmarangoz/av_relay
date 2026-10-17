@@ -20,8 +20,12 @@ jobs:
         shell: pwsh
         run: |
           $installer = Join-Path $env:RUNNER_TEMP 'gstreamer-setup.exe'
-          Invoke-WebRequest 'https://gstreamer.freedesktop.org/data/pkg/windows/1.28.8/msvc/gstreamer-1.0-msvc-x86_64-1.28.8.exe' -OutFile $installer
-          if ((Get-AuthenticodeSignature $installer).Status -ne 'Valid') { throw 'Invalid GStreamer signature' }
+          curl.exe --fail --location --retry 3 --silent --show-error 'https://gstreamer.freedesktop.org/data/pkg/windows/1.28.8/msvc/gstreamer-1.0-msvc-x86_64-1.28.8.exe' --output $installer
+          if ($LASTEXITCODE -ne 0) { throw 'GStreamer download failed' }
+          # Upstream signs this installer with a detached OpenPGP signature,
+          # not Authenticode. Pin the published .exe.sha256sum value.
+          $expected = 'e4c41ee6ee9c6c32a45d198463ec08d79bac3bd5fa58adc93d13fe4a08abc9d9'
+          if ((Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) { throw 'GStreamer checksum mismatch' }
           $root = Join-Path $env:RUNNER_TEMP 'gstreamer'
           $process = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER','/TYPE=devel',"/DIR=$root") -WindowStyle Hidden -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "GStreamer install failed: $($process.ExitCode)" }
