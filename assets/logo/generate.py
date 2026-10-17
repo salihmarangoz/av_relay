@@ -98,24 +98,33 @@ def placement(pad):
 
 
 def svg_motif(state, size, pad, colour):
+    """The motif as filled paths only: symbolic icons are recoloured by
+    their fill (GTK, GNOME Shell), so strokes would keep their colour."""
     scale, ox, oy = placement(pad)
     s = size * scale
     tx, ty = size * ox, size * oy
+    f = lambda v: f"{v:.3f}"
     out = []
     for kind, (cx, cy), r, w in motif_parts(state):
         x, y = tx + cx * s, ty + cy * s
         if kind == "ring":
-            out.append(f'<circle cx="{x:.3f}" cy="{y:.3f}" r="{r * s:.3f}" fill="none" stroke="{colour}" stroke-width="{w * s:.3f}"/>')
+            ro, ri = (r + w / 2) * s, (r - w / 2) * s
+            circle = lambda rr: f"M {f(x - rr)} {f(y)} a {f(rr)} {f(rr)} 0 1 0 {f(2 * rr)} 0 a {f(rr)} {f(rr)} 0 1 0 {f(-2 * rr)} 0 Z"
+            out.append(f'<path fill="{colour}" fill-rule="evenodd" d="{circle(ro)} {circle(ri)}"/>')
         elif kind == "disc":
-            out.append(f'<circle cx="{x:.3f}" cy="{y:.3f}" r="{r * s:.3f}" fill="{colour}"/>')
+            out.append(f'<circle cx="{f(x)}" cy="{f(y)}" r="{f(r * s)}" fill="{colour}"/>')
         else:
+            # An annular sector with round caps.
             a = math.radians(ARC_SPAN)
-            x0, y0 = x + r * s * math.cos(-a), y + r * s * math.sin(-a)
-            x1, y1 = x + r * s * math.cos(a), y + r * s * math.sin(a)
-            out.append(
-                f'<path d="M {x0:.3f} {y0:.3f} A {r * s:.3f} {r * s:.3f} 0 0 1 {x1:.3f} {y1:.3f}" '
-                f'fill="none" stroke="{colour}" stroke-width="{w * s:.3f}" stroke-linecap="round"/>'
-            )
+            ro, ri, cap = (r + w / 2) * s, (r - w / 2) * s, w / 2 * s
+            pt = lambda rr, ang: (x + rr * math.cos(ang), y + rr * math.sin(ang))
+            o0, o1 = pt(ro, -a), pt(ro, a)
+            i1, i0 = pt(ri, a), pt(ri, -a)
+            d = (f"M {f(o0[0])} {f(o0[1])} A {f(ro)} {f(ro)} 0 0 1 {f(o1[0])} {f(o1[1])} "
+                 f"A {f(cap)} {f(cap)} 0 0 1 {f(i1[0])} {f(i1[1])} "
+                 f"A {f(ri)} {f(ri)} 0 0 0 {f(i0[0])} {f(i0[1])} "
+                 f"A {f(cap)} {f(cap)} 0 0 1 {f(o0[0])} {f(o0[1])} Z")
+            out.append(f'<path fill="{colour}" d="{d}"/>')
     return "\n  ".join(out)
 
 
