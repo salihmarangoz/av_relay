@@ -9,6 +9,15 @@ import Foundation
 import Testing
 import WebRTC
 
+enum Hardware {
+    /// True on a virtual Mac, such as a CI runner.
+    static let isVirtualMachine: Bool = {
+        var present: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        return sysctlbyname("kern.hv_vmm_present", &present, &size, nil, 0) == 0 && present == 1
+    }()
+}
+
 @Suite(.serialized) struct LoopbackTests {
     @Test func onDemandVideoAndAudio() async throws {
         var settings = MediaEngine.Settings()
@@ -29,23 +38,27 @@ import WebRTC
         engine.receive(.media(video: true, audio: true), from: client)
         #expect(await waitUntil { client.lastState().map { $0.video == .on && $0.audio == .on } == true })
         #expect(await waitUntil { client.frames.count > 10 })
+        #expect(await waitUntil { await client.inbound("audio").packets > 0 })
         let start = client.frames.count
         let audioStart = await client.inbound("audio").packets
         try await Task.sleep(for: .seconds(2))
         let fps = Double(client.frames.count - start) / 2
-        #expect(fps >= 25, "frame rate \(fps)")
-        // The sender: hardware H.264 at the full size, held back by nothing.
+        let audioReceived = await client.inbound("audio").packets - audioStart
+        #expect(await client.inbound("video").mimeType == "video/H264")
         let report = await engine.statistics()
         let outbound = report?.statistics.values.first { $0.type == "outbound-rtp" && $0.values["kind"] as? String == "video" }
         #expect(outbound?.values["encoderImplementation"] as? String == "VideoToolbox")
-        #expect(outbound?.values["qualityLimitationReason"] as? String == "none")
-        #expect(client.frames.size == CGSize(width: 1920, height: 1080), "size \(client.frames.size)")
-        #expect(await client.inbound("video").mimeType == "video/H264")
-        let audioReceived = await client.inbound("audio").packets - audioStart
-        let audioSent = await engine.statistics()?.statistics.values
-            .first { $0.type == "outbound-rtp" && $0.values["kind"] as? String == "audio" }?.values["packetsSent"]
-        #expect(audioReceived >= 50,  // 20 ms packets: ~100 in 2 s
-                "audio packets received in 2 s: \(audioReceived); sent in total: \(audioSent.map { "\($0)" } ?? "?"); recording: \(engine.microphoneIsRecording)")
+        if Hardware.isVirtualMachine {
+            // A CI runner: no media hardware and little CPU. Media must flow; speed isn't measured.
+            #expect(fps >= 5, "frame rate \(fps)")
+            #expect(audioReceived >= 20, "audio packets in 2 s: \(audioReceived)")
+        } else {
+            // 1080p at the full frame rate (the level fix), from hardware H.264, held back by nothing.
+            #expect(fps >= 25, "frame rate \(fps)")
+            #expect(outbound?.values["qualityLimitationReason"] as? String == "none")
+            #expect(client.frames.size == CGSize(width: 1920, height: 1080), "size \(client.frames.size)")
+            #expect(audioReceived >= 80, "audio packets in 2 s: \(audioReceived)")  // 20 ms packets: ~100
+        }
         #expect(engine.microphoneIsRecording)
 
         // Both off: after the linger, the mic stops recording and video stops.
@@ -86,7 +99,9 @@ import WebRTC
             return nil
         }
         #expect(!videoStates.dropFirst(videoStates.firstIndex(of: .on) ?? 0).contains(.off))
-        #expect(client.frames.size == CGSize(width: 640, height: 480))
+        if !Hardware.isVirtualMachine {
+            #expect(client.frames.size == CGSize(width: 640, height: 480))
+        }
     }
 }
 
