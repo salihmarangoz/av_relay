@@ -42,6 +42,16 @@ To check: `cat /sys/module/v4l2loopback/version`. When something's wrong,
 the top bar menu shows **Camera unavailable: details…**, and the AV Relay
 window says what to run. The microphone works either way.
 
+If the module is installed but not loaded, `sudo modprobe v4l2loopback
+devices=0` loads it; restart AV Relay after that. The package loads it at
+every startup through `/etc/modules-load.d/av-relay.conf`. If that file is
+missing, a plain reinstall doesn't bring it back (dpkg keeps a deleted
+setting deleted); this one does:
+
+```
+sudo apt install --reinstall -o Dpkg::Options::=--force-confmiss ./av-relay_<version>_amd64.deb
+```
+
 The package loads v4l2loopback with `devices=0`, so it doesn't create a
 dummy camera; AV Relay creates **AV Relay Camera** (`/dev/video48` when that
 number is free) on its own. Other software that uses v4l2loopback, such as

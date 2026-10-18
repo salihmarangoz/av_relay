@@ -10,6 +10,11 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Ubuntu: when v4l2loopback is installed but not loaded, the camera error
+  says so and how to load it, instead of asking to install it again.
+
 ## [0.4.0] - 2026-10-18
 
 ### Added

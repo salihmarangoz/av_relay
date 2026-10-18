@@ -63,6 +63,11 @@ impl CameraFormat {
 pub fn check_loopback() -> Result<(u32, u32, u32)> {
     let ctl = match File::open(CONTROL_DEVICE) {
         Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound && module_installed() => bail!(
+            "the v4l2loopback kernel module is installed but not loaded. `sudo modprobe v4l2loopback devices=0` \
+             loads it; then restart AV Relay. If it isn't loaded after the next restart, \
+             /etc/modules-load.d/av-relay.conf is missing: see /usr/share/doc/av-relay/linux.md."
+        ),
         Err(e) if e.kind() == io::ErrorKind::NotFound => bail!(
             "the v4l2loopback kernel module isn't loaded. On Ubuntu 24.04 with the HWE kernel, install it with \
              `sudo apt install linux-modules-v4l2loopback-generic-hwe-24.04` and restart the computer."
@@ -89,6 +94,16 @@ pub fn check_loopback() -> Result<(u32, u32, u32)> {
         );
     }
     Ok(version)
+}
+
+/// Whether the running kernel has a v4l2loopback module that modprobe can load.
+fn module_installed() -> bool {
+    let Ok(release) = fs::read_to_string("/proc/sys/kernel/osrelease") else { return false };
+    let Ok(deps) = fs::read_to_string(format!("/lib/modules/{}/modules.dep", release.trim())) else { return false };
+    deps.lines().any(|line| {
+        let module = line.split(':').next().unwrap_or_default();
+        module.rsplit('/').next().is_some_and(|name| name.starts_with("v4l2loopback.ko"))
+    })
 }
 
 /// Returns the number N of the loopback device /dev/videoN labelled `label`,
