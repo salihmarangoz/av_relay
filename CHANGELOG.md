@@ -10,6 +10,8 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-18
+
 ### Fixed
 
 - Ubuntu: when v4l2loopback is installed but not loaded, the camera error
@@ -140,7 +142,8 @@ The first release.
   No account, no cloud.
 - Protocol version 1 (`av-relay/1`, docs/protocol.md).
 
-[Unreleased]: https://github.com/salihmarangoz/av_relay/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/salihmarangoz/av_relay/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/salihmarangoz/av_relay/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/salihmarangoz/av_relay/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/salihmarangoz/av_relay/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/salihmarangoz/av_relay/compare/v0.2.0...v0.2.1
