@@ -201,6 +201,9 @@ private func estimateSinks(_ engine: MediaEngine) async -> Bool {
         engine.start(channel: client, hello: Hello(name: "test", app: "test", video: VideoFormat(width: 640, height: 480, fps: 30)))
         #expect(await waitUntil { client.connected })
         #expect(client.offers == 1)
+        // Connected can come before the engine has applied the answer; two restarts
+        // sent then would both wait for that answer and make one offer, not two.
+        #expect(await waitUntil { !engine.offerOutstanding })
 
         engine.receive(.iceRestart, from: client)
         engine.receive(.iceRestart, from: client)

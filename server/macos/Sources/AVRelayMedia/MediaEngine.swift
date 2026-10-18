@@ -125,6 +125,9 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
     /// Whether libwebrtc has the microphone recording (tests).
     var microphoneIsRecording: Bool { microphone.isRecording }
 
+    /// Whether the call has an offer out whose answer isn't applied yet (tests).
+    var offerOutstanding: Bool { queue.sync { call?.offerOutstanding ?? false } }
+
     /// A few lines on how the current call is doing (diagnostics).
     public func statisticsSummary() async -> String {
         guard let report = await statistics() else { return "no call" }
@@ -276,6 +279,7 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
         private var remoteDescriptionSet = false
         /// An offer is out and its answer not yet applied: one at a time.
         private var offering = false
+        var offerOutstanding: Bool { offering }
         /// An ICE restart asked for while an offer was out; it follows the answer.
         private var restartPending = false
         private var pendingCandidates: [RTCIceCandidate] = []
