@@ -169,12 +169,12 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
         await statistics()?.statistics.values.first { $0.type == "outbound-rtp" && $0.values["kind"] as? String == "video" }?.values
     }
 
-    /// The bandwidth estimate on the call's path, in bit/s (tests).
+    /// The bandwidth estimate on the call's path, in bit/s (tests). Only the transport's
+    /// selected candidate pair has it; more than one pair may be nominated.
     func availableOutgoingBitrate() async -> Int? {
-        let pair = await statistics()?.statistics.values.first {
-            $0.type == "candidate-pair" && ($0.values["nominated"] as? NSNumber)?.boolValue == true
-        }
-        return (pair?.values["availableOutgoingBitrate"] as? NSNumber)?.intValue
+        guard let stats = await statistics()?.statistics else { return nil }
+        let selected = stats.values.lazy.compactMap { $0.type == "transport" ? $0.values["selectedCandidatePairId"] as? String : nil }.first
+        return (selected.flatMap { stats[$0] }?.values["availableOutgoingBitrate"] as? NSNumber)?.intValue
     }
 
     /// Switches the camera; a running capture moves over at once.
