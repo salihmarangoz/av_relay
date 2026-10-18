@@ -24,6 +24,8 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and no longer turn off after a call. The microphone is on demand like the
   camera: the sender captures only while an app records from CABLE Output.
 - Windows: smooth (antialiased) switches in the settings window.
+- Windows: less CPU per video frame: the decoder outputs the virtual camera's
+  NV12 format directly instead of converting every frame.
 
 ### Fixed
 

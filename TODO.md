@@ -50,15 +50,19 @@ CHANGELOG `[Unreleased]`. Tested on
 2026-10-18 with a headless Edge reading OBS Virtual Camera, open/close
 cycles against the real sender.
 
-- **Video conversion.** GStreamer decodes to YUY2 for Linux's v4l2loopback,
-  then `vcam::yuy2_to_nv12` converts each frame on the streaming thread.
-  Asking GStreamer for NV12 directly on Windows would save a pass.
 - **Old reports of "A lot of buffers are being dropped".** A 0.3.0 log had
   17 s of video frames dropped as late right after the camera started.
   Not reproduced in 14 cycles with this build; watch for it.
 
 ## Tests with real use
 
+- **Ubuntu receiver after the Windows review.** Code it shares with Windows
+  changed: the playout delay ignores a restarted stream's start-up burst
+  (`media/delay.rs`), and `media/mod.rs` logs the decoded size
+  (`receiving video at WxH`) and picks the camera's pixel format per platform
+  (YUY2 on Linux, as before). CI builds and unit-tests it; run a real call on
+  Ubuntu: camera opened and closed a few times with the microphone on and
+  off, the picture's colours right, no rise in `playout delay` at restarts.
 - A real call over Wi-Fi (Discord, Firefox, OBS) with the released apps:
   no audible stutter, lips in sync. If not, the receiver's `stats:` lines
   (`journalctl --user -t io.github.salihmarangoz.avrelay.desktop`) show

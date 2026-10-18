@@ -237,14 +237,14 @@ struct Frame {
 #[derive(Clone)]
 pub struct VideoFeed {
     frame: Arc<Mutex<Frame>>,
-    width: usize,
-    height: usize,
     period: Duration,
 }
 impl VideoFeed {
-    pub fn push(&self, yuy2: &[u8]) {
+    /// A decoded frame, already NV12 at the camera's size.
+    pub fn push(&self, nv12: &[u8]) {
         let mut frame = self.frame.lock().unwrap();
-        if yuy2_to_nv12(yuy2, &mut frame.pixels, self.width, self.height) {
+        if nv12.len() == frame.pixels.len() {
+            frame.pixels.copy_from_slice(nv12);
             let now = Instant::now();
             if let Some(gap) = frame.received.map(|t| now - t) {
                 frame.stats.max_gap = frame.stats.max_gap.max(gap);
@@ -281,8 +281,6 @@ impl Camera {
                 received: None,
                 stats: CamStats::default(),
             })),
-            width: format.width as usize,
-            height: format.height as usize,
             period: Duration::from_secs_f64(1.0 / format.fps as f64),
         };
         let stop = Arc::new(AtomicBool::new(false));
@@ -368,40 +366,24 @@ pub fn installed() -> bool {
     ok
 }
 
-/// YUY2's horizontal chroma is averaged vertically to NV12's 2x2 chroma.
-fn yuy2_to_nv12(src: &[u8], dst: &mut [u8], width: usize, height: usize) -> bool {
-    let pixels = width * height;
-    if width % 2 != 0 || height % 2 != 0 || src.len() != pixels * 2 || dst.len() != pixels * 3 / 2 {
-        return false;
-    }
-    for i in 0..pixels {
-        dst[i] = src[i * 2];
-    }
-    for y in (0..height).step_by(2) {
-        for x in (0..width).step_by(2) {
-            let a = (y * width + x) * 2;
-            let b = a + width * 2;
-            let uv = pixels + y / 2 * width + x;
-            dst[uv] = ((src[a + 1] as u16 + src[b + 1] as u16 + 1) / 2) as u8;
-            dst[uv + 1] = ((src[a + 3] as u16 + src[b + 3] as u16 + 1) / 2) as u8;
-        }
-    }
-    true
-}
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn nv12_has_correct_luma_chroma_and_bounds() {
-        let mut dst = [0; 6];
-        assert!(yuy2_to_nv12(
-            &[10, 20, 30, 40, 50, 60, 70, 80],
-            &mut dst,
-            2,
-            2
-        ));
-        assert_eq!(dst, [10, 30, 50, 70, 40, 60]);
-        assert!(!yuy2_to_nv12(&[0; 7], &mut dst, 2, 2));
+    fn takes_whole_nv12_frames_only() {
+        let feed = VideoFeed {
+            frame: Arc::new(Mutex::new(Frame {
+                pixels: black(4),
+                received: None,
+                stats: CamStats::default(),
+            })),
+            period: Duration::from_millis(33),
+        };
+        feed.push(&[1, 2, 3, 4, 5]);
+        assert_eq!(feed.take_stats().pushed, 0, "a short frame is dropped");
+        feed.push(&[10, 20, 30, 40, 50, 60]);
+        assert_eq!(feed.frame.lock().unwrap().pixels, [10, 20, 30, 40, 50, 60]);
+        assert_eq!(feed.take_stats().pushed, 1);
     }
     /// A mapping name of the test's own: the real camera may be in use.
     fn test_name(test: &str) -> String {

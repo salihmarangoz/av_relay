@@ -654,8 +654,15 @@ fn add_decoder(
     Ok((media == "video").then_some((ssrc, sink)))
 }
 
+/// The camera's pixel format and its bytes per pixel pair: YUYV for
+/// v4l2loopback; NV12 on Windows, which OBS Virtual Camera reads as is.
+#[cfg(not(windows))]
+const CAMERA_FORMAT: (&str, usize) = ("YUY2", 4);
+#[cfg(windows)]
+const CAMERA_FORMAT: (&str, usize) = ("NV12", 3);
+
 /// H.264 → decoded → scaled (keeping the aspect ratio) into the camera's
-/// exact YUYV format.
+/// exact format (CAMERA_FORMAT).
 fn video_branch(video: VideoFormat, sinks: Arc<Sinks>) -> Result<(Vec<gst::Element>, gst_app::AppSink)> {
     let depay = gst::ElementFactory::make("rtph264depay")
         // Ask for a keyframe on loss and show nothing broken meanwhile.
@@ -745,12 +752,12 @@ fn video_branch(video: VideoFormat, sinks: Arc<Sinks>) -> Result<(Vec<gst::Eleme
     }
     let convert = gst::ElementFactory::make("videoconvertscale").property("add-borders", true).build()?;
     let caps = gst::Caps::builder("video/x-raw")
-        .field("format", "YUY2")
+        .field("format", CAMERA_FORMAT.0)
         .field("width", video.width as i32)
         .field("height", video.height as i32)
         .field("pixel-aspect-ratio", gst::Fraction::new(1, 1))
         .build();
-    let frame_size = video.width as usize * video.height as usize * 2;
+    let frame_size = video.width as usize * video.height as usize * CAMERA_FORMAT.1 / 2;
     // Synchronized: a frame goes out at its timestamp plus the pipeline's
     // latency (the playout delay), plus the offset that matches the audio's
     // own queue. A frame late by more than a few frames is skipped, so the
