@@ -8,6 +8,19 @@ impl Ui {
         self.refresh();
     }
     pub(super) unsafe fn command(&mut self, id: u16, notification: u16) {
+        // Controls notify more than their action: a list opening or
+        // closing, a double-click. Act on the action alone; the refresh after
+        // any other notification put a combo box back to the saved choice
+        // before its CBN_SELCHANGE came (the resolution never changed), and a
+        // double-click toggled a switch twice. Menu items arrive as clicks.
+        let action = match id {
+            RESOLUTION | CABLE => notification == CBN_SELCHANGE as u16,
+            FOUND => notification == LBN_SELCHANGE as u16,
+            _ => notification == BN_CLICKED as u16,
+        };
+        if !action {
+            return;
+        }
         match id {
             // Flipped here at once, so a second click before the receiver's
             // answer toggles back; the answer (Event::Demand) corrects it.

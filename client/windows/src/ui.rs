@@ -385,11 +385,16 @@ unsafe extern "system" fn window_proc(
         _ => {}
     }
     let Ok(mut ui) = cell.try_borrow_mut() else {
-        if matches!(
-            message,
-            WM_PAINT | WM_ERASEBKGND | WM_DRAWITEM | WM_CTLCOLORSTATIC
-        ) {
-            MISSED_PAINT.set(true);
+        match message {
+            WM_PAINT | WM_ERASEBKGND | WM_DRAWITEM | WM_CTLCOLORSTATIC => MISSED_PAINT.set(true),
+            // The default would destroy the window: hide it as usual.
+            WM_CLOSE => {
+                ShowWindow(hwnd, SW_HIDE);
+                return 0;
+            }
+            // Still end the loop, so run() returns and main quits the app.
+            WM_DESTROY => PostQuitMessage(0),
+            _ => {}
         }
         return DefWindowProcW(hwnd, message, wparam, lparam);
     };
@@ -456,6 +461,10 @@ unsafe extern "system" fn window_proc(
         }
         _ => {}
     }
+    // Without the borrow: the defaults run modal loops (moving the window,
+    // the system menu) and send WM_CLOSE from the title bar's X, all of which
+    // come back here and need the Ui.
+    drop(ui);
     DefWindowProcW(hwnd, message, wparam, lparam)
 }
 /// Shows the tray menu and carries out the choice as a menu command.

@@ -30,6 +30,12 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Sender: when the camera starts again while the microphone stays on, video
   comes back at full quality at once, instead of 320x180 at 10–15 fps for
   about 20 seconds.
+- Windows: the Resolution and Microphone output lists in the settings window
+  change the setting; the choice used to snap back, so only the tray menu
+  could switch the resolution.
+- Windows: closing the settings window with its X hides it to the tray; it
+  could leave AV Relay running without a window or tray icon, unable to be
+  opened again until it was ended in Task Manager.
 - Windows: the settings window no longer flickers when the receiver's state
   changes; controls are only touched when their text or state changes.
 - Windows: after the sender restarts or quits during a call, the receiver
