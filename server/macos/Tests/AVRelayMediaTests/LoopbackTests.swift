@@ -138,6 +138,45 @@ enum Hardware {
             #expect(video?["qualityLimitationReason"] as? String == "none")
         }
     }
+
+    /// The same after a stretch with no media at all, where a new start alone
+    /// doesn't hold: libwebrtc puts the sunk estimate back before the first frame,
+    /// and in a real call (camera warm-up, no probes before the first packet) the
+    /// encoder dropped its first frames as too large for 300 kbit/s and started at
+    /// 320x180 and 10 fps. The encoder's target must not dip that low.
+    @Test func videoAfterNoMediaStartsAtTheSeed() async throws {
+        var settings = MediaEngine.Settings()
+        settings.camera = .testPattern
+        settings.microphone = .testTone
+        settings.linger = 0.3
+        let engine = MediaEngine(settings: settings)
+        let client = LoopbackClient(engine: engine)
+        defer {
+            engine.end(channel: client)
+            client.peer.close()
+        }
+        engine.start(channel: client, hello: Hello(name: "test", app: "test", video: VideoFormat(width: 1280, height: 720, fps: 30)))
+        #expect(await waitUntil { client.connected })
+        engine.receive(.media(video: true, audio: true), from: client)
+        #expect(await waitUntil { client.frames.count > 10 })
+        engine.receive(.media(video: false, audio: true), from: client)
+        let sank = await waitUntil(15) { await engine.availableOutgoingBitrate().map { $0 <= 400_000 } == true }
+        let estimate = await engine.availableOutgoingBitrate() ?? -1
+        #expect(sank, "the estimate no longer sinks while only audio flows: \(estimate)")
+        engine.receive(.media(video: false, audio: false), from: client)
+        #expect(await waitUntil { client.lastState().map { $0.video == .off && $0.audio == .off } == true })
+        try await Task.sleep(for: .seconds(2))
+
+        // Without the floor: 300 kbit/s, then ~470 for 0.4 s. With it: ~1.6 Mbit/s and up.
+        let begin = Date()
+        var lowest = Int.max
+        engine.receive(.media(video: true, audio: false), from: client)
+        while Date().timeIntervalSince(begin) < 1 {
+            if let target = await engine.videoOutbound()?["targetBitrate"] as? NSNumber { lowest = min(lowest, target.intValue) }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(lowest >= 1_000_000, "the encoder's target dipped to \(lowest)")
+    }
 }
 
 @Suite(.serialized) struct NegotiationTests {
