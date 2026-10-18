@@ -27,9 +27,9 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- Sender: when the camera starts again while the microphone stays on, video
-  comes back at full quality at once, instead of 320x180 at 10–15 fps for
-  about 20 seconds.
+- Sender: when the camera starts again during a session, after the microphone
+  ran alone or after a pause with neither, video comes back at full quality at
+  once, instead of 320x180 at 10–15 fps for about 20 seconds.
 - Windows: the Resolution and Microphone output lists in the settings window
   change the setting; the choice used to snap back, so only the tray menu
   could switch the resolution.

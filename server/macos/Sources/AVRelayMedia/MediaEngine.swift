@@ -284,6 +284,9 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
         private var lastReported: Message?
         private var linger: [Kind: DispatchWorkItem] = [:]
         private var iceRecovery: DispatchWorkItem?
+        /// The bandwidth estimate's floor is at the seed while video starts (holdBandwidthFloor).
+        private var floorHeld = false
+        private var floorRelease: DispatchWorkItem?
         private var closed = false
         private var diagnostics: DispatchSourceTimer?
         private var queue: DispatchQueue { engine.queue }
@@ -367,14 +370,42 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
             startDiagnostics()
         }
 
-        /// Starts the bandwidth estimate at half the format's cap: at the call's start, and
-        /// whenever video starts again. A LAN carries far more than libwebrtc's cautious ~300 kbit/s
-        /// start, which would also make it start 1080p at a reduced resolution; and while only
-        /// audio flows, the estimate sinks to that floor, so video resumed there starts at 320x180
-        /// and 10 fps and takes ~25 s to climb back. GCC still backs off if the Wi-Fi can't keep up.
+        /// Where the bandwidth estimate starts: half the format's cap. A LAN carries far more than
+        /// libwebrtc's cautious ~300 kbit/s start, which would also make it start 1080p at a reduced
+        /// resolution. GCC still backs off if the Wi-Fi can't keep up.
+        private var seedBitrate: Int { MediaEngine.maxVideoBitrate(format) / 2 }
+
+        /// At the call's start.
         private func seedBandwidthEstimate() {
-            let cap = MediaEngine.maxVideoBitrate(format)
-            peer?.setBweMinBitrateBps(NSNumber(value: 300_000), currentBitrateBps: NSNumber(value: cap / 2), maxBitrateBps: nil)
+            peer?.setBweMinBitrateBps(NSNumber(value: 300_000), currentBitrateBps: NSNumber(value: seedBitrate), maxBitrateBps: nil)
+        }
+
+        /// Whenever video starts: the estimate starts at the seed and can't fall below it until the
+        /// camera has run for a moment (releaseBandwidthFloor). While only audio flows, the estimate
+        /// sinks to 300 kbit/s; a new start alone doesn't hold when no media brings feedback, as
+        /// libwebrtc puts the old estimate back within milliseconds. The encoder then drops its first
+        /// frames as too large for 300 kbit/s, and video starts at 320x180 and 10 fps and takes ~25 s
+        /// to climb back.
+        private func holdBandwidthFloor() {
+            floorRelease?.cancel()
+            floorRelease = nil
+            floorHeld = true
+            peer?.setBweMinBitrateBps(NSNumber(value: seedBitrate), currentBitrateBps: NSNumber(value: seedBitrate), maxBitrateBps: nil)
+        }
+
+        /// Lowers the floor to 300 kbit/s again, after `delay`: the first frames are out and
+        /// feedback flows, so the estimate is a real one from here on.
+        private func releaseBandwidthFloor(after delay: TimeInterval = 0) {
+            guard floorHeld else { return }
+            floorRelease?.cancel()
+            let item = DispatchWorkItem { [weak self] in
+                guard let self, !self.closed, self.floorHeld else { return }
+                self.floorHeld = false
+                self.floorRelease = nil
+                self.peer?.setBweMinBitrateBps(NSNumber(value: 300_000), currentBitrateBps: nil, maxBitrateBps: nil)
+            }
+            floorRelease = item
+            queue.asyncAfter(deadline: .now() + delay, execute: item)
         }
 
         /// Every 5 s while the camera or microphone runs: one log line with the
@@ -405,6 +436,7 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
             diagnostics = nil
             linger.values.forEach { $0.cancel() }
             iceRecovery?.cancel()
+            floorRelease?.cancel()
             // At once, no linger: the session is over.
             engine.camera.stop()
             peer?.close()
@@ -539,7 +571,7 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
                 guard granted else { return self.deviceFailed(kind, .permissionDenied) }
                 switch kind {
                 case .video:
-                    self.seedBandwidthEstimate()
+                    self.holdBandwidthFloor()
                     self.engine.camera.start(format: self.format)
                     self.setActive(self.videoSender, true)
                 case .audio:
@@ -565,6 +597,7 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
             case .video:
                 setActive(videoSender, false)
                 engine.camera.stop()
+                releaseBandwidthFloor()
             case .audio:
                 setActive(audioSender, false)
             }
@@ -574,6 +607,7 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
         func deviceCapturing(_ kind: Kind) {
             guard !closed, wanted[kind] == true || states[kind]!.state == .starting else { return }
             if kind == .video {
+                releaseBandwidthFloor(after: 2)
                 setState(.video, DeviceState(state: .on, width: format.width, height: format.height, fps: format.fps))
             } else {
                 setState(.audio, DeviceState(state: .on))
@@ -600,6 +634,7 @@ public final class MediaEngine: NSObject, SessionHandler, @unchecked Sendable {
             case .video:
                 setActive(videoSender, false)
                 engine.camera.stop()
+                releaseBandwidthFloor()
             case .audio:
                 setActive(audioSender, false)
             }
