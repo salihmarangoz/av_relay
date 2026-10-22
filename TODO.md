@@ -54,6 +54,28 @@ cycles against the real sender.
   17 s of video frames dropped as late right after the camera started.
   Not reproduced in 14 cycles with this build; watch for it.
 
+## Microphone stall (Ubuntu receiver)
+
+The watchdog in `client/linux/src/audio/mod.rs` replaces the virtual mic's
+stream when it stops taking audio; why it stops is still open.
+
+- **Seen** on 2026-10-23 (Ubuntu 24.04, PipeWire 1.0.5, receiver 0.2.1):
+  a Bluetooth headset connected (A2DP, quantum 256) 4 s into a Discord
+  call recording from the mic. Within 10 s the stream got one last process
+  call with `requested` 0 (so it wrote the whole 16384-frame buffer) and was
+  never called again; `pw-top` counted an error on the node every cycle.
+  Each time Discord linked again, the stream got exactly one call, again
+  with `requested` 0. Forcing the quantum to 1024 and back
+  (`pw-metadata -n settings 0 clock.force-quantum 1024`) cured it.
+- **Not it:** moving the mic between drivers, changing the graph's rate or
+  quantum, one whole-buffer write, or a bad rate in the rate-match area did
+  not reproduce it in a container (PipeWire 1.0.5, null sinks).
+- **Next time:** the `virtual microphone stalled (...)` warning logs the
+  stream's free and queued buffers and the size PipeWire asked for; free
+  buffers at 0 points at buffers never coming back, a size of 0 at the
+  converter asking for nothing. A Bluetooth headset connecting and
+  disconnecting during a call is the way to try reproducing it.
+
 ## Tests with real use
 
 - **Ubuntu receiver after the Windows review.** Code it shares with Windows

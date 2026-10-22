@@ -10,6 +10,17 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Ubuntu: AV Relay Microphone stays at 100% volume. Apps that adjust the
+  microphone level themselves (automatic gain control, as in Discord) could
+  turn it down to a few percent, which made the sender's voice nearly
+  silent. Mute still works, and other microphones are left alone.
+- Ubuntu: if AV Relay Microphone stops passing sound while an app records
+  from it (seen once a Bluetooth headset connected during a call), AV Relay
+  notices within about 2 seconds and sets the microphone up again. Before,
+  the app recorded silence until AV Relay was switched off and on.
+
 ## [0.4.1] - 2026-10-18
 
 ### Fixed

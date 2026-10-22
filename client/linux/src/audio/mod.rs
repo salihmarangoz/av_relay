@@ -4,6 +4,8 @@
 //!   Microphone" that apps record from, fed with the sender's audio;
 //! - noticing when an app records from it (the node starts streaming), so
 //!   the sender's microphone runs only then;
+//! - keeping that node's volume at 100%, and replacing the node if it stops
+//!   taking audio while in use;
 //! - the default input: made the virtual mic while the sender is connected, and
 //!   given back afterwards (PipeWire's "default" metadata, which WirePlumber
 //!   follows).
@@ -15,12 +17,13 @@ mod default_input;
 mod dll;
 mod playout;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use pipewire as pw;
@@ -55,6 +58,18 @@ const RING_CAPACITY: usize = RATE as usize;
 /// chunk: with this the loop speeds up by up to ~0.3%, enough to follow the
 /// cushion as it shrinks (playout.rs) without hearing a change in pitch.
 const MAX_ERROR: f64 = playout::CHUNK as f64;
+
+/// In use, but no buffer handed to PipeWire for this long: the mic has
+/// stalled. A cycle takes a buffer every quantum, and even the largest
+/// (8192 frames) is 170 ms.
+const STALL_TIMEOUT: Duration = Duration::from_millis(1500);
+/// After replacing a stalled mic, the next replacement waits this long.
+const REPLACE_INTERVAL: Duration = Duration::from_secs(10);
+/// How often the watchdog looks for a stall or a changed volume.
+const WATCHDOG_PERIOD: Duration = Duration::from_millis(500);
+/// A volume put back to 100% is logged at most this often (an app's gain
+/// control can keep turning it down).
+const VOLUME_LOG_INTERVAL: Duration = Duration::from_secs(60);
 
 /// What happened to the microphone's audio, for the stats log.
 #[derive(Default)]
@@ -264,7 +279,17 @@ fn run(cmd_rx: pw::channel::Receiver<Cmd>, ready: &mpsc::Sender<Result<()>>) -> 
         move |cmd| match cmd {
             Cmd::StartMic { consumer, in_use, counters, on_usage } => {
                 mic.borrow_mut().take();
-                match Mic::new(&core, consumer, in_use, counters, on_usage) {
+                let shared = Rc::new(MicShared {
+                    consumer: RefCell::new(consumer),
+                    on_usage,
+                    in_use,
+                    counters,
+                    last_output: Cell::new(Instant::now()),
+                    last_replaced: Cell::new(None),
+                    volume_change: Cell::new(None),
+                    volume_logged: Cell::new(None),
+                });
+                match Mic::new(&core, shared) {
                     Ok(m) => *mic.borrow_mut() = Some(m),
                     Err(e) => log::error!("creating the virtual microphone: {e}"),
                 }
@@ -284,6 +309,30 @@ fn run(cmd_rx: pw::channel::Receiver<Cmd>, ready: &mpsc::Sender<Result<()>>) -> 
             }
         }
     });
+
+    // Puts back a changed volume, and replaces a stalled mic with a new one
+    // fed from the same queue: the apps recording from it are linked to the
+    // new node (same name), and the sender's microphone restarts once.
+    let watchdog = mainloop.loop_().add_timer({
+        let core = core.clone();
+        let mic = mic.clone();
+        move |_| {
+            let mut mic = mic.borrow_mut();
+            if let Some(m) = mic.as_ref() {
+                m.restore_volume();
+            }
+            let Some(old) = mic.as_ref().filter(|m| m.stalled()) else { return };
+            log::warn!("virtual microphone stalled ({}); creating it again", old.diagnostics());
+            let shared = old.shared.clone();
+            shared.last_replaced.set(Some(Instant::now()));
+            mic.take();
+            match Mic::new(&core, shared) {
+                Ok(m) => *mic = Some(m),
+                Err(e) => log::error!("creating the virtual microphone again: {e}"),
+            }
+        }
+    });
+    watchdog.update_timer(Some(WATCHDOG_PERIOD), Some(WATCHDOG_PERIOD)).into_sync_result()?;
 
     let _ = ready.send(Ok(()));
     mainloop.run();
@@ -341,19 +390,35 @@ fn node_name_from_json(value: &str) -> Option<String> {
 struct Mic {
     _listener: pw::stream::StreamListener<MicState>,
     stream: pw::stream::StreamRc,
+    shared: Rc<MicShared>,
 }
 
-struct MicState {
-    consumer: HeapCons<f32>,
+/// What outlives one stream of the mic: the watchdog replaces a stalled
+/// stream with a new one built from this.
+struct MicShared {
+    consumer: RefCell<HeapCons<f32>>,
     on_usage: Box<dyn Fn(bool) + Send>,
     /// Shared with the feed, which drops audio while this is false.
     in_use: Arc<AtomicBool>,
+    counters: Arc<MicCounters>,
+    /// When a buffer last went to PipeWire (or the stream started streaming).
+    last_output: Cell<Instant>,
+    /// When the watchdog last replaced a stalled stream.
+    last_replaced: Cell<Option<Instant>>,
+    /// A volume control something changed, for the watchdog to put back:
+    /// its id, its number of values and the volume it was set to.
+    volume_change: Cell<Option<(u32, usize, f32)>>,
+    /// When a volume put back to 100% was last logged.
+    volume_logged: Cell<Option<Instant>>,
+}
+
+struct MicState {
+    shared: Rc<MicShared>,
     rate_match: *mut spa::sys::spa_io_rate_match,
     dll: Dll,
     playout: Playout,
     scratch: Vec<f32>,
     cycles: u64,
-    counters: Arc<MicCounters>,
 }
 
 impl Drop for Mic {
@@ -363,13 +428,7 @@ impl Drop for Mic {
 }
 
 impl Mic {
-    fn new(
-        core: &pw::core::CoreRc,
-        consumer: HeapCons<f32>,
-        in_use: Arc<AtomicBool>,
-        counters: Arc<MicCounters>,
-        on_usage: Box<dyn Fn(bool) + Send>,
-    ) -> Result<Self> {
+    fn new(core: &pw::core::CoreRc, shared: Rc<MicShared>) -> Result<Self> {
         let props = pw::properties::properties! {
             *pw::keys::MEDIA_TYPE => "Audio",
             *pw::keys::MEDIA_CLASS => "Audio/Source",
@@ -380,15 +439,12 @@ impl Mic {
         };
         let stream = pw::stream::StreamRc::new(core.clone(), "av-relay-mic", props)?;
         let state = MicState {
-            consumer,
-            on_usage,
-            in_use,
+            shared: shared.clone(),
             rate_match: std::ptr::null_mut(),
             dll: Dll::new(dll::BW_MIN, 128, RATE),
             playout: Playout::default(),
             scratch: Vec::new(),
             cycles: 0,
-            counters,
         };
         let listener = stream
             .add_local_listener_with_user_data(state)
@@ -397,13 +453,15 @@ impl Mic {
                 if let pw::stream::StreamState::Error(e) = &new {
                     log::error!("virtual microphone: {e}");
                 }
-                if in_use != state.in_use.load(Ordering::Relaxed) {
-                    state.in_use.store(in_use, Ordering::Relaxed);
-                    state.consumer.clear();
+                let shared = &state.shared;
+                if in_use != shared.in_use.load(Ordering::Relaxed) {
+                    shared.in_use.store(in_use, Ordering::Relaxed);
+                    shared.consumer.borrow_mut().clear();
+                    shared.last_output.set(Instant::now());
                     state.playout = Playout::default();
                     state.dll.reset();
                     log::info!("virtual microphone {}", if in_use { "in use" } else { "idle" });
-                    (state.on_usage)(in_use);
+                    (shared.on_usage)(in_use);
                 }
             })
             .io_changed(|_stream, state, id, area, _size| {
@@ -412,6 +470,7 @@ impl Mic {
                     log::debug!("virtual mic: rate matching {}", if area.is_null() { "gone" } else { "available" });
                 }
             })
+            .control_info(|_stream, state, id, control| note_volume(&state.shared, id, control))
             .process(|stream, state| process(stream, state))
             .register()?;
 
@@ -439,7 +498,7 @@ impl Mic {
         // listener's state is never shared with PipeWire's data thread.
         stream.connect(spa::utils::Direction::Output, None, pw::stream::StreamFlags::MAP_BUFFERS, &mut params)?;
         log::info!("virtual microphone '{MIC_DESCRIPTION}' created");
-        Ok(Self { _listener: listener, stream })
+        Ok(Self { _listener: listener, stream, shared })
     }
 }
 
@@ -459,7 +518,8 @@ fn process(stream: &pw::stream::Stream, state: &mut MicState) {
         state.scratch.clear();
         state.scratch.resize(wanted, 0.0);
 
-        if let Some(error) = state.playout.fill(&mut state.consumer, &mut state.scratch, &state.counters) {
+        let shared = &state.shared;
+        if let Some(error) = state.playout.fill(&mut shared.consumer.borrow_mut(), &mut state.scratch, &shared.counters) {
             let corr = state.dll.update(error.clamp(-MAX_ERROR, MAX_ERROR));
             state.cycles += 1;
             if state.cycles % 256 == 0 {
@@ -479,6 +539,81 @@ fn process(stream: &pw::stream::Stream, state: &mut MicState) {
     *chunk.offset_mut() = 0;
     *chunk.stride_mut() = stride as i32;
     *chunk.size_mut() = (frames * stride) as u32;
+    state.shared.last_output.set(Instant::now());
+}
+
+impl Mic {
+    /// In use, yet no buffer went to PipeWire for a while. Seen on Ubuntu
+    /// 24.04 (PipeWire 1.0.5) right after a Bluetooth headset connected
+    /// during a call: the stream was never asked for audio again, so the app
+    /// recorded silence. The app recording again didn't help; renegotiating
+    /// the stream (a change of the graph's quantum) did, and a new stream
+    /// starts clean.
+    fn stalled(&self) -> bool {
+        let s = &self.shared;
+        s.in_use.load(Ordering::Relaxed)
+            && s.last_output.get().elapsed() > STALL_TIMEOUT
+            && s.last_replaced.get().is_none_or(|t| t.elapsed() > REPLACE_INTERVAL)
+    }
+
+    /// The stream's buffers and the size PipeWire last asked for, for the log.
+    fn diagnostics(&self) -> String {
+        let mut t: pw::sys::pw_time = unsafe { std::mem::zeroed() };
+        let res = unsafe { pw::sys::pw_stream_get_time_n(self.stream.as_raw_ptr(), &mut t, size_of::<pw::sys::pw_time>()) };
+        if res < 0 {
+            return format!("no stream time: {}", std::io::Error::from_raw_os_error(-res));
+        }
+        format!(
+            "{} ms since the last buffer, buffers {} free {} queued, asked for {} frames, clock {}/{}",
+            self.shared.last_output.get().elapsed().as_millis(),
+            t.avail_buffers,
+            t.queued_buffers,
+            t.size,
+            t.rate.num,
+            t.rate.denom
+        )
+    }
+
+    /// Puts a volume that `note_volume` saw changed back at 100%. Not from
+    /// inside that callback: there, PipeWire reports the controls again with
+    /// the old value, and with PipeWire 1.0.5 AV Relay then crashed when an
+    /// app next linked.
+    fn restore_volume(&self) {
+        let Some((id, n_values, volume)) = self.shared.volume_change.take() else { return };
+        let mut full = vec![1.0f32; n_values];
+        // Its arguments are (id, count, values) groups ended by a 0 id;
+        // pipewire-rs's set_control leaves the 0 out.
+        let res = unsafe { pw::sys::pw_stream_set_control(self.stream.as_raw_ptr(), id, n_values as u32, full.as_mut_ptr(), 0u32) };
+        if res < 0 {
+            return log::warn!("virtual microphone: setting the volume back: {}", std::io::Error::from_raw_os_error(-res));
+        }
+        let logged = &self.shared.volume_logged;
+        if logged.get().is_none_or(|t| t.elapsed() > VOLUME_LOG_INTERVAL) {
+            // As pactl and GNOME show it: the cube root of the linear factor.
+            log::info!("virtual microphone volume set to {:.0}%; back to 100%", volume.max(0.0).cbrt() * 100.0);
+            logged.set(Some(Instant::now()));
+        }
+    }
+}
+
+/// Notes a change of the mic's volume, to put it back at 100%. Apps with
+/// automatic gain control turn down the system volume of the microphone they
+/// record from; during a Discord call it was at 12% once, and the sender's
+/// voice nearly silent. How loud the mic is belongs to the sender's input level;
+/// here a lower volume only throws signal away. Only this node's volume:
+/// mute still works, and other microphones are left alone.
+fn note_volume(shared: &MicShared, id: u32, control: *const pw::sys::pw_stream_control) {
+    if id != spa::sys::SPA_PROP_volume && id != spa::sys::SPA_PROP_channelVolumes {
+        return;
+    }
+    let Some(control) = (unsafe { control.as_ref() }) else { return };
+    if control.values.is_null() || control.n_values == 0 {
+        return;
+    }
+    let values = unsafe { std::slice::from_raw_parts(control.values, control.n_values as usize) };
+    if let Some(&volume) = values.iter().find(|v| (**v - 1.0).abs() > 1e-4) {
+        shared.volume_change.set(Some((id, values.len(), volume)));
+    }
 }
 
 #[cfg(test)]

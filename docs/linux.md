@@ -148,6 +148,11 @@ tree: `client/linux/scripts/devices-test.html`), click **Start**, and pick
 **AV Relay Camera** and **AV Relay Microphone**. It shows the picture, its
 size and frame rate, and a level meter for the microphone.
 
+**The microphone's volume goes back to 100%.** On purpose: AV Relay
+Microphone passes on the sender's sound, and a lower volume here only throws
+some of it away. Set how loud you are on the sender (on a Mac: System
+Settings → Sound → Input) or in the app. Muting it still works.
+
 **Sound or picture drops out now and then.** Usually that's Wi-Fi: a
 Wi-Fi network can go quiet for 0.1-0.5 seconds now and then (some do it
 every 20-30 seconds). AV Relay plays sound and picture a little after they
@@ -171,7 +176,9 @@ journalctl --user -t io.github.salihmarangoz.avrelay.desktop -f
 While an app uses the camera or microphone, a `stats:` line every 10
 seconds shows what arrived (packets lost, recovered by resending, given up
 on), how evenly frames reached the camera, and how often the microphone ran
-dry. Or start it from a terminal with `RUST_LOG=info av-relay`.
+dry. `virtual microphone stalled (...)` means the microphone stopped
+passing sound while in use and was set up again; the numbers in it help
+find out why. Or start it from a terminal with `RUST_LOG=info av-relay`.
 
 ## Uninstall
 
