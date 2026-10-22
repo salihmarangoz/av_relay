@@ -10,6 +10,8 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-23
+
 ### Fixed
 
 - Ubuntu: AV Relay Microphone stays at 100% volume. Apps that adjust the
@@ -153,7 +155,8 @@ The first release.
   No account, no cloud.
 - Protocol version 1 (`av-relay/1`, docs/protocol.md).
 
-[Unreleased]: https://github.com/salihmarangoz/av_relay/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/salihmarangoz/av_relay/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/salihmarangoz/av_relay/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/salihmarangoz/av_relay/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/salihmarangoz/av_relay/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/salihmarangoz/av_relay/compare/v0.2.1...v0.3.0
