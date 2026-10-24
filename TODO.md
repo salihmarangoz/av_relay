@@ -78,6 +78,15 @@ stream when it stops taking audio; why it stops is still open.
 
 ## Tests with real use
 
+- **Playout delay after the 15 s window (Unreleased).** In a real call over
+  Wi-Fi: after a one-off stall, one gap and no `playout delay` rise in the
+  log; after stalls within 15 s of each other, a rise, and the `stats:`
+  delay back at 200 ms within ~10 s of talking (`ms caught up` in the
+  `stats:` lines). Listen while it comes down: speech up to 10% faster at
+  the same pitch should sound normal, no warble or clipped words, lips in
+  step. If not, lower `CATCH_UP` or raise `MIN_LIKENESS`
+  (`audio/playout.rs`, `audio/stretch.rs`).
+
 - **Ubuntu receiver after the Windows review.** Code it shares with Windows
   changed: the playout delay ignores a restarted stream's start-up burst
   (`media/delay.rs`), and `media/mod.rs` logs the decoded size

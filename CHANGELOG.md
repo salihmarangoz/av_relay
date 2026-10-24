@@ -10,6 +10,23 @@ and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- After one long Wi-Fi stall, sound and picture could stay up to 2 seconds
+  behind for a quarter of an hour, even across a restart of AV Relay. Now a
+  one-off stall is a single gap and the delay stays low. The delay grows
+  only while stalls keep coming back within 15 seconds of each other, and
+  comes back down 15 seconds after the last one. On Ubuntu it comes down by
+  playing the sound a little faster at the same pitch, so nothing is cut:
+  up to 10% faster while someone talks, twice as fast in a pause (from 1.1
+  seconds, about 9 seconds of talking or 5 of silence). On Windows it comes
+  down at once while the microphone is off, otherwise slowly as before.
+- Ubuntu: each call starts at 0.3 seconds of delay instead of where the
+  last one ended.
+- Ubuntu: sound that comes in late after a short stall is caught up the
+  same way instead of skipped; only more than 0.2 seconds of it is still
+  dropped.
+
 ## [0.4.2] - 2026-10-23
 
 ### Fixed

@@ -8,12 +8,18 @@
 //! cushion shrinks again, slowly, once the network has been calm for a while,
 //! and the resampler (steered by the caller's DLL) absorbs the change
 //! inaudibly. Gaps fade out and in, so they never click.
+//!
+//! More audio than that queued (a stall's backlog, or a drop of the playout
+//! delay, which hands its step over at once) is caught up by playing a
+//! little faster at the same pitch (stretch.rs): up to 10% in speech, twice
+//! as fast where it's quiet. Nothing is thrown away unless far too much is
+//! queued.
 
 use ringbuf::HeapCons;
 use ringbuf::traits::{Consumer, Observer};
 use std::sync::atomic::Ordering;
 
-use super::{MicCounters, RATE};
+use super::{MicCounters, RATE, stretch};
 
 /// Audio arrives in 20 ms chunks (Opus frames, paced by the WebRTC jitter
 /// buffer), while the consumer takes one graph quantum per cycle (often
@@ -40,13 +46,31 @@ const DECAY: f64 = 0.001;
 /// A gap longer than this isn't a network stall (the sender's mic stopped, say):
 /// starting again doesn't grow the margin.
 const MAX_STALL: usize = RATE as usize;
+/// More than this beyond the target, the excess is caught up by playing
+/// faster, until it's down to a chunk or less; the rest is the resampler's.
+pub const CATCH_UP_ABOVE: usize = CHUNK * 2;
+/// In loud audio, catching up plays at most this much faster...
+const CATCH_UP: f64 = 0.1;
+/// ...in quiet audio, at most twice as fast.
+const CATCH_UP_QUIET: usize = 1;
 /// Beyond the target by more than this, drop the excess at once,
-/// crossfaded. It happens right after a stall: the delayed audio can keep
-/// coming in after playback resumed. Catching up through the resampler would
-/// take a minute, with audio late (and out of step with video) all along.
-const MAX_EXCESS: usize = CHUNK * 3;
+/// crossfaded: catching up would leave the sound behind the picture for
+/// seconds. Only a long stall's backlog does this.
+const MAX_EXCESS: usize = CHUNK * 10;
 /// Length of the fade before a gap and after it.
 const FADE: usize = RATE as usize / 400;
+/// Audio is quiet when its level is within this of the noise floor (10 dB;
+/// the sender sends its mic unprocessed, room noise and all)...
+const QUIET_OVER_FLOOR: f32 = 3.16;
+/// ...or below this (-60 dBFS), and never when above this (-30 dBFS).
+const QUIET_BELOW: f32 = 0.001;
+const QUIET_CEILING: f32 = 0.0316;
+/// The level is measured in blocks this long (5 ms), so a word's onset
+/// shows.
+const LEVEL_BLOCK: usize = RATE as usize / 200;
+/// The noise floor follows quieter cycles at once, louder ones by 3 dB a
+/// second.
+const FLOOR_RISE_PER_SEC: f32 = 1.41;
 
 #[derive(Debug)]
 pub struct Playout {
@@ -69,11 +93,35 @@ pub struct Playout {
     calm: usize,
     /// Frames of fade-in still to apply.
     fade_in: usize,
+    /// The level (RMS) of the room's noise in the audio played.
+    floor: f32,
+    /// Whether the excess is being caught up (see CATCH_UP_ABOVE)...
+    catching_up: bool,
+    /// ...and frames loud audio may lose now, earned at CATCH_UP.
+    budget: f64,
+    /// Audio looked at ahead of playing it.
+    ahead: Vec<f32>,
 }
 
 impl Default for Playout {
     fn default() -> Self {
-        Self { margin: MIN_MARGIN, primed: false, gap: 0, dry: 0, last_stall: 0, left: 0, stalled: false, calm: 0, fade_in: 0 }
+        Self {
+            margin: MIN_MARGIN,
+            primed: false,
+            gap: 0,
+            dry: 0,
+            last_stall: 0,
+            left: 0,
+            stalled: false,
+            calm: 0,
+            fade_in: 0,
+            floor: QUIET_CEILING,
+            catching_up: false,
+            budget: 0.0,
+            // Room for the largest quantum (8192) and a cut, so the audio
+            // thread doesn't allocate.
+            ahead: Vec::with_capacity(16_384),
+        }
     }
 }
 
@@ -100,7 +148,44 @@ impl Playout {
         self.dry += wanted;
         let (error, left) = self.play(queue, out, counters, avail);
         self.left = left;
+        if error.is_some() {
+            self.follow_floor(out);
+        }
         error
+    }
+
+    /// Moves the noise floor with the level of audio just played.
+    fn follow_floor(&mut self, out: &[f32]) {
+        let rise = FLOOR_RISE_PER_SEC.powf(out.len() as f32 / RATE as f32);
+        self.floor = (self.floor * rise).min(level(out)).max(QUIET_BELOW / QUIET_OVER_FLOOR);
+    }
+
+    /// Whether `audio` is quiet throughout, against the noise floor.
+    fn quiet(&self, audio: &[f32]) -> bool {
+        let limit = (self.floor * QUIET_OVER_FLOOR).max(QUIET_BELOW).min(QUIET_CEILING);
+        audio.chunks(LEVEL_BLOCK).all(|block| level(block) <= limit)
+    }
+
+    /// Fills `out` from `queue`, shortened by up to `room` frames (see
+    /// stretch.rs). Returns how many frames it took.
+    fn catch_up(&mut self, queue: &mut HeapCons<f32>, out: &mut [f32], room: usize, counters: &MicCounters) -> usize {
+        let wanted = out.len();
+        let quiet_cut = room.min(wanted * CATCH_UP_QUIET).min(stretch::MAX_CUT);
+        let loud_cut = room.min(self.budget as usize).min(stretch::MAX_CUT);
+        let need = stretch::input_needed(wanted, quiet_cut.max(loud_cut));
+        self.ahead.resize(need, 0.0);
+        if queue.peek_slice(&mut self.ahead) < need {
+            queue.pop_slice(out);
+            return wanted;
+        }
+        let quiet = self.quiet(&self.ahead[..quiet_cut + stretch::CROSSFADE]);
+        let used = stretch::shorten(&self.ahead, out, if quiet { quiet_cut } else { loud_cut }, quiet);
+        queue.skip(used);
+        if !quiet {
+            self.budget -= (used - wanted) as f64;
+        }
+        counters.stretched_frames.fetch_add((used - wanted) as u64, Ordering::Relaxed);
+        used
     }
 
     /// One cycle, from `avail` frames queued. Returns the DLL's error, and
@@ -124,7 +209,9 @@ impl Playout {
                 counters.silent_frames.fetch_add(wanted as u64, Ordering::Relaxed);
                 return (None, avail);
             }
-            if avail > target {
+            // What came in during the gap plays, caught up; only far too
+            // much is dropped (in silence anyway).
+            if avail > target + MAX_EXCESS {
                 counters.skipped_frames.fetch_add((avail - target) as u64, Ordering::Relaxed);
                 queue.skip(avail - target);
                 avail = target;
@@ -166,7 +253,20 @@ impl Playout {
             return (None, 0);
         }
 
-        queue.pop_slice(out);
+        self.budget = (self.budget + wanted as f64 * CATCH_UP).min(stretch::MAX_CUT as f64);
+        let excess = avail.saturating_sub(target);
+        if excess > CATCH_UP_ABOVE {
+            self.catching_up = true;
+        } else if excess <= CHUNK {
+            self.catching_up = false;
+        }
+        counters.catching_up.store(self.catching_up, Ordering::Relaxed);
+        let used = if self.catching_up {
+            self.catch_up(queue, out, excess - CHUNK / 2, counters)
+        } else {
+            queue.pop_slice(out);
+            wanted
+        };
         self.apply_fade_in(out);
         if let Some(old) = crossfade {
             for (i, (s, o)) in out.iter_mut().zip(old).enumerate() {
@@ -182,7 +282,7 @@ impl Playout {
         if self.calm > HOLD {
             self.margin = (self.margin - wanted as f64 * DECAY).max(MIN_MARGIN);
         }
-        (Some(target as f64 - avail as f64), avail - wanted)
+        (Some(target as f64 - avail as f64), avail - used)
     }
 
     fn apply_fade_in(&mut self, out: &mut [f32]) {
@@ -194,6 +294,11 @@ impl Playout {
             self.fade_in -= 1;
         }
     }
+}
+
+/// RMS of `audio`.
+fn level(audio: &[f32]) -> f32 {
+    (audio.iter().map(|s| s * s).sum::<f32>() / audio.len().max(1) as f32).sqrt()
 }
 
 /// Ramps the end of `out` down to silence.
@@ -209,6 +314,7 @@ fn fade_out(out: &mut [f32]) {
 mod tests {
     use super::*;
     use ringbuf::HeapRb;
+    use std::time::Duration;
     use ringbuf::traits::{Observer, Producer, Split};
 
     /// Runs `secs` of audio: 20 ms chunks from the network, except that
@@ -280,13 +386,163 @@ mod tests {
         assert!(c.skipped_frames.load(Ordering::Relaxed) < CHUNK as u64 * 2);
     }
 
+    /// Frequency from upward zero crossings.
+    fn frequency(x: &[f32]) -> f32 {
+        let ups = x.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count();
+        ups as f32 * RATE as f32 / x.len() as f32
+    }
+
     #[test]
-    fn audio_that_trickles_in_after_a_stall_is_dropped() {
+    fn a_backlog_is_caught_up_at_the_same_pitch() {
+        // A 150 ms stall, its backlog coming in at once (spread out, the
+        // simulation would deliver it out of order).
+        let (c, _, played) = simulate(10.0, &[(3.0, 0.15)]);
+        // Played, faster, rather than dropped...
+        assert_eq!(c.skipped_frames.load(Ordering::Relaxed), 0);
+        assert!(c.stretched_frames.load(Ordering::Relaxed) > 0);
+        // ...the 440 Hz tone still 440 Hz and unbroken...
+        let after = &played[RATE as usize * 3 + RATE as usize / 5..RATE as usize * 6];
+        let hz = frequency(after);
+        assert!((hz - 440.0).abs() < 3.0, "{hz} Hz");
+        let worst = after.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        assert!(worst < 0.05, "a jump of {worst}");
+        // ...and caught up by the end, but for what the resampler takes
+        // (no rate matching here, and chunks arriving whole).
+        let (fill, target) = (c.fill.load(Ordering::Relaxed), c.target.load(Ordering::Relaxed));
+        assert!(fill <= target + CATCH_UP_ABOVE as u64, "{fill} queued for a target of {target}");
+    }
+
+    #[test]
+    fn a_backlog_too_big_to_catch_up_is_dropped() {
         // A 400 ms stall whose backlog takes 200 ms to come in.
         let ((c, _, _), most_above) = simulate_spread(10.0, &[(3.0, 0.4)], 0.2);
         assert!(c.skipped_frames.load(Ordering::Relaxed) > 0);
-        // At most 60 ms (MAX_EXCESS) plus a chunk arriving whole.
-        assert!(most_above <= CHUNK * 4, "{most_above} frames above the target");
+        // At most MAX_EXCESS, plus what comes in (twice as fast) by the next
+        // cycle.
+        assert!(most_above <= MAX_EXCESS + CHUNK * 3, "{most_above} frames above the target");
+    }
+
+    /// Cycles of 1024 frames (fed as fast as played) until the excess over
+    /// the target, `extra` frames of `signal` at the start, is caught up.
+    fn cycles_to_catch_up(extra: usize, signal: impl Fn(usize) -> f32) -> (usize, MicCounters) {
+        let (mut prod, mut cons) = HeapRb::<f32>::new(RATE as usize).split();
+        let counters = MicCounters::default();
+        let mut playout = Playout::default();
+        let quantum = 1024usize;
+        let mut sample = 0usize;
+        let mut push = |prod: &mut ringbuf::HeapProd<f32>, n: usize| {
+            for _ in 0..n {
+                prod.try_push(signal(sample)).unwrap();
+                sample += 1;
+            }
+        };
+        push(&mut prod, playout.target(quantum) + extra);
+        let mut out = vec![0.0; quantum];
+        for cycle in 1..1000 {
+            playout.fill(&mut cons, &mut out, &counters);
+            push(&mut prod, quantum);
+            if cons.occupied_len() <= playout.target(quantum) + CHUNK {
+                return (cycle, counters);
+            }
+        }
+        panic!("never caught up");
+    }
+
+    #[test]
+    fn speech_catches_up_at_most_10_percent_faster_and_pauses_at_once() {
+        let tone = |i: usize| (i as f32 * 440.0 * std::f32::consts::TAU / RATE as f32).sin() * 0.3;
+        // 100 ms over, 80 ms of it to catch up: at 10%, 38 cycles (0.8 s)
+        // of loud audio at least...
+        let (cycles, c) = cycles_to_catch_up(RATE as usize / 10, tone);
+        assert!((38..80).contains(&cycles), "{cycles} cycles");
+        assert_eq!(c.skipped_frames.load(Ordering::Relaxed), 0);
+        // ...and a few cycles of room noise at -50 dBFS.
+        let (cycles, _) = cycles_to_catch_up(RATE as usize / 10, |i| tone(i) * 0.015);
+        assert!(cycles <= 6, "{cycles} cycles");
+    }
+
+    /// The playout delay coming down from `from` to its minimum, each step
+    /// handing the mic that much `signal` at once, the next step waiting
+    /// until the mic has caught up (as app::serve does). Returns how long
+    /// it took and the most the sound fell behind the picture, in seconds.
+    fn delay_coming_down(from: f64, signal: impl Fn(usize) -> f32) -> (f64, f64) {
+        use crate::media::delay::{Fall, MIN, PlayoutDelay};
+        let (mut prod, mut cons) = HeapRb::<f32>::new(RATE as usize).split();
+        let counters = MicCounters::default();
+        let mut playout = Playout::default();
+        let mut delay = PlayoutDelay::new(Duration::from_secs_f64(from));
+        let (quantum, tick) = (1024usize, Duration::from_millis(250));
+        let (mut sample, mut t, mut next_chunk, mut next_cycle, mut next_tick) = (0usize, 0.0f64, 0.0f64, 0.0f64, 1.0f64);
+        let mut push = |prod: &mut ringbuf::HeapProd<f32>, n: usize| {
+            for _ in 0..n {
+                prod.try_push(signal(sample)).unwrap();
+                sample += 1;
+            }
+        };
+        let mut out = vec![0.0; quantum];
+        let mut behind = 0.0f64;
+        while delay.current() > MIN {
+            t = next_chunk.min(next_cycle).min(next_tick);
+            if t == next_chunk {
+                push(&mut prod, CHUNK);
+                next_chunk += CHUNK as f64 / RATE as f64;
+            } else if t == next_cycle {
+                playout.fill(&mut cons, &mut out, &counters);
+                if playout.primed {
+                    let over = cons.occupied_len().saturating_sub(playout.target(quantum));
+                    behind = behind.max(over as f64 / RATE as f64);
+                }
+                next_cycle += quantum as f64 / RATE as f64;
+            } else {
+                let fall = if counters.caught_up() { Fall::Step } else { Fall::Hold };
+                let before = delay.current();
+                delay.update(&[0.0], tick, fall);
+                push(&mut prod, ((before - delay.current()).as_secs_f64() * RATE as f64) as usize);
+                next_tick += tick.as_secs_f64();
+            }
+            assert!(t < 120.0, "still at {:?}", delay.current());
+        }
+        (t - 1.0, behind)
+    }
+
+    #[test]
+    fn the_delay_comes_down_in_seconds_with_the_sound_in_step() {
+        let tone = |i: usize| (i as f32 * 440.0 * std::f32::consts::TAU / RATE as f32).sin() * 0.3;
+        // From 1.14 s, in speech: 100 ms a second or so.
+        let (took, behind) = delay_coming_down(1.14, tone);
+        assert!((6.0..15.0).contains(&took), "{took} s");
+        assert!(behind < 0.08, "sound {behind} s behind");
+        // In a pause, faster.
+        let (took, behind) = delay_coming_down(1.14, |i| tone(i) * 0.015);
+        assert!(took < 6.0, "{took} s");
+        assert!(behind < 0.08, "sound {behind} s behind");
+    }
+
+    #[test]
+    fn quiet_is_told_from_speech_by_the_room_noise() {
+        let block = |amplitude: f32, from: usize, n: usize| -> Vec<f32> {
+            (from..from + n).map(|i| (i as f32 * 200.0 * std::f32::consts::TAU / RATE as f32).sin() * amplitude).collect()
+        };
+        // 10 s of speech at -20 dBFS (words of 300 ms, 100 ms apart) over
+        // room noise at -50 dBFS teach the floor.
+        let (noise, word) = (0.0045, 0.14);
+        let mut playout = Playout::default();
+        for i in (0..RATE as usize * 10).step_by(1024) {
+            let t = i as f64 / RATE as f64;
+            playout.follow_floor(&block(if t % 0.4 < 0.3 { word } else { noise }, i, 1024));
+        }
+        assert!(playout.quiet(&block(noise, 0, 1200)));
+        assert!(!playout.quiet(&block(word, 0, 1200)));
+        // A word starting at the very end still counts.
+        let mut onset = block(noise, 0, 1200);
+        onset[960..].copy_from_slice(&block(word, 960, 240));
+        assert!(!playout.quiet(&onset));
+        // A loud room is never quiet, however steady.
+        let mut loud = Playout::default();
+        for i in (0..RATE as usize * 10).step_by(1024) {
+            loud.follow_floor(&block(0.1, i, 1024));
+        }
+        assert!(!loud.quiet(&block(0.1, 0, 1200)));
     }
 
     #[test]
@@ -298,7 +554,7 @@ mod tests {
         let mut out = vec![0.0; quantum];
         prod.push_iter(std::iter::repeat_n(0.1, playout.target(quantum)));
         playout.fill(&mut cons, &mut out, &counters);
-        prod.push_iter(std::iter::repeat_n(0.1, CHUNK * 10));
+        prod.push_iter(std::iter::repeat_n(0.1, CHUNK * 20));
         let error = playout.fill(&mut cons, &mut out, &counters).unwrap();
         assert_eq!(playout.left, cons.occupied_len());
         assert_eq!(error, 0.0);

@@ -157,11 +157,14 @@ Settings → Sound → Input) or in the app. Muting it still works.
 Wi-Fi network can go quiet for 0.1-0.5 seconds now and then (some do it
 every 20-30 seconds). AV Relay plays sound and picture a little after they
 were captured, the same for both so lips stay in sync, and sets that delay
-from how late packets arrived over the last minute: 0.2 seconds on a calm
-network, up to 2 seconds on a stalling one. After a stall longer than
-the delay you may hear one gap; the delay then grows so the next one passes,
-and shrinks again slowly once the network is calm. It starts each call with
-the delay the last one ended with. For less delay, bring the sender closer
+from how late packets arrived over the last 15 seconds: 0.2 seconds on a
+calm network. A single stall longer than that is one gap you may hear, and
+the delay stays low. Only when stalls come back within 15 seconds of each
+other does the delay grow so the next ones pass (up to 2 seconds); 15
+seconds after the last one it shrinks again by playing the sound a little
+faster at the same pitch (up to 10% while someone talks, twice as fast in
+a pause), so nothing is cut. Each call starts at 0.3 seconds. For less
+delay, bring the sender closer
 to the router or use a cable on either side. To see whether it's the network, ping the router from either
 computer for a minute (`ping -c 60 <router address>`) and look for
 replies slower than 100 ms.

@@ -3,7 +3,7 @@ use crate::{
     audio::{AudioFeed, AudioOutput, MicStats},
     crypto::StaticKey,
     discovery,
-    media::{InboundStats, MediaEvent, Receiver, Sinks, delay::PlayoutDelay},
+    media::{InboundStats, MediaEvent, Receiver, Sinks, delay::{Fall, PlayoutDelay}},
     proto::{
         self, ClientMsg, ServerMsg,
         pairing::{self, ClientInfo},
@@ -479,7 +479,7 @@ impl Core {
                     let (audio,video)=media.spreads();
                     let spreads:Vec<f64>=audio.into_iter().chain(video).collect();
                     let before=delay.current();
-                    if let Some(d)=delay.update(&spreads,Duration::from_millis(250)) {
+                    if let Some(d)=delay.update(&spreads,Duration::from_millis(250),if self.audio.is_none() {Fall::Step} else {Fall::Slow}) {
                         if d>before {log::info!("playout delay {} ms (network spread: audio {:?}, video {:?})",d.as_millis(),audio,video);}
                         media.set_delay(d,Duration::from_millis(40));
                     }

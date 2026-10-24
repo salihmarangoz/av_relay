@@ -16,6 +16,7 @@
 mod default_input;
 mod dll;
 mod playout;
+mod stretch;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -80,6 +81,10 @@ pub struct MicCounters {
     pub silent_frames: AtomicU64,
     /// Frames thrown away because too much was queued.
     pub skipped_frames: AtomicU64,
+    /// Frames caught up by playing faster (see playout.rs), and whether
+    /// that's going on now.
+    pub stretched_frames: AtomicU64,
+    pub catching_up: AtomicBool,
     /// Samples the feed couldn't queue (ring full).
     pub overflow_samples: AtomicU64,
     /// The queue when the app last took audio, and its target, in frames.
@@ -93,6 +98,7 @@ pub struct MicStats {
     pub underruns: u64,
     pub silent_frames: u64,
     pub skipped_frames: u64,
+    pub stretched_frames: u64,
     pub overflow_samples: u64,
     pub fill: u64,
     pub target: u64,
@@ -104,12 +110,20 @@ impl MicCounters {
         self.target.load(Ordering::Relaxed)
     }
 
+    /// Whether the mic has caught up with what the last drop of the playout
+    /// delay handed it (and nothing else is waiting to be).
+    pub fn caught_up(&self) -> bool {
+        !self.catching_up.load(Ordering::Relaxed)
+            && self.fill.load(Ordering::Relaxed) <= self.target.load(Ordering::Relaxed) + playout::CATCH_UP_ABOVE as u64
+    }
+
     /// The counts since the last call (which resets them) and the queue now.
     pub fn take(&self) -> MicStats {
         MicStats {
             underruns: self.underruns.swap(0, Ordering::Relaxed),
             silent_frames: self.silent_frames.swap(0, Ordering::Relaxed),
             skipped_frames: self.skipped_frames.swap(0, Ordering::Relaxed),
+            stretched_frames: self.stretched_frames.swap(0, Ordering::Relaxed),
             overflow_samples: self.overflow_samples.swap(0, Ordering::Relaxed),
             fill: self.fill.load(Ordering::Relaxed),
             target: self.target.load(Ordering::Relaxed),

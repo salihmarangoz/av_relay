@@ -26,12 +26,12 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, watch};
 
 use crate::audio::{self, DefaultInput, MicFeed, MicStats, PipeWire};
-use crate::media::delay::PlayoutDelay;
+use crate::media::delay::{Fall, PlayoutDelay};
 use crate::media::{InboundStats, MediaEvent, Receiver, Sinks};
 use crate::proto::pairing::{self, ClientInfo, PairingAttempt};
 use crate::proto::session::{self, SessionError};
 use crate::proto::{CaptureState, ClientMsg, DeviceState, ServerMsg, VideoFormat};
-use crate::store::{Learned, PairedSender, Store, hex_encode};
+use crate::store::{PairedSender, Store, hex_encode};
 use crate::vcam::{self, CamStats, CameraFormat, VirtualCamera};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -41,8 +41,9 @@ const PING_EVERY: Duration = Duration::from_secs(5);
 const STATS_EVERY: Duration = Duration::from_secs(10);
 /// How often the playout delay follows the network (see media::delay).
 const SYNC_EVERY: Duration = Duration::from_millis(250);
-/// The playout delay a first session starts with, before it has learned
-/// anything: enough for most Wi-Fi hiccups.
+/// The playout delay every session starts with, before it has learned
+/// anything: enough for most Wi-Fi hiccups. Not where the last one ended:
+/// a bad stretch would carry over.
 const FIRST_DELAY: Duration = Duration::from_millis(300);
 const SILENCE_LIMIT: Duration = Duration::from_secs(15);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
@@ -684,10 +685,7 @@ async fn serve(
     kept.until = None;
     let devices = kept.devices.as_ref().expect("just made sure");
     devices.show_live();
-    // Start where the last session ended: the network is likely the same.
-    let mut playout = PlayoutDelay::new(
-        core.store.learned().playout_delay_ms.map(|ms| Duration::from_millis(ms.into())).unwrap_or(FIRST_DELAY),
-    );
+    let mut playout = PlayoutDelay::new(FIRST_DELAY);
     log::info!("playout delay {} ms to start", playout.current().as_millis());
     let receiver = Receiver::new(
         Some(local_ip),
@@ -800,7 +798,10 @@ async fn serve(
                 let (audio_spread, video_spread) = receiver.spreads();
                 let spreads: Vec<f64> = [audio_spread, video_spread].into_iter().flatten().collect();
                 let before = playout.current();
-                if let Some(delay) = playout.update(&spreads, SYNC_EVERY) {
+                // The mic catches up with each step down before the next;
+                // without an app on it, there's nothing to catch up.
+                let fall = if !devices.mic_used() || devices.mic.counters().caught_up() { Fall::Step } else { Fall::Hold };
+                if let Some(delay) = playout.update(&spreads, SYNC_EVERY, fall) {
                     let ms = |s: Option<f64>| s.map_or("-".to_string(), |s| format!("{:.0}", s * 1000.0));
                     let line = format!(
                         "playout delay {} ms (network spread: audio {} ms, video {} ms)",
@@ -819,13 +820,6 @@ async fn serve(
                 let inbound = receiver.stats();
                 if devices.camera_used() || devices.mic_used() {
                     log::info!("{}", stats_line(&inbound, &prev_inbound, cam, mic, playout.current()));
-                    // For the next session.
-                    let learned = Learned { playout_delay_ms: Some(playout.current().as_millis() as u32) };
-                    if core.store.learned() != learned {
-                        if let Err(e) = core.store.save_learned(&learned) {
-                            log::warn!("saving the playout delay: {e:#}");
-                        }
-                    }
                 }
                 prev_inbound = inbound;
             }
@@ -906,10 +900,11 @@ fn stats_line(now: &[InboundStats], prev: &[InboundStats], cam: Option<CamStats>
         );
     }
     line += &format!(
-        " mic {} underruns, {} ms silence, {} ms skipped, {} ms overflow, queue {}/{} ms",
+        " mic {} underruns, {} ms silence, {} ms skipped, {} ms caught up, {} ms overflow, queue {}/{} ms",
         mic.underruns,
         ms(mic.silent_frames),
         ms(mic.skipped_frames),
+        ms(mic.stretched_frames),
         ms(mic.overflow_samples),
         ms(mic.fill),
         ms(mic.target)
